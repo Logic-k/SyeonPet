@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QMouseEvent, QPainter, QPixmap, QRegion, QTransform
+from PySide6.QtGui import QColor, QGuiApplication, QMouseEvent, QPainter, QPixmap, QRegion, QTransform
 from PySide6.QtWidgets import QWidget
 
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
@@ -38,6 +38,49 @@ class SpriteBank:
                 "durations": durations,
                 "loop": bool(meta.get("loop", True)),
             }
+        self._load_optional_thinking(assets)
+
+    def _load_optional_thinking(self, assets: Path) -> None:
+        """Load the separate Sprite-Gen row without changing the original atlas.
+
+        Only the two fixed paths are used: a missing or corrupt optional row
+        leaves thinking unavailable and the behavior controller falls back to
+        idle. Manifest filenames are never interpreted as paths.
+        """
+        folder = assets / "thinking"
+        try:
+            manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+            sheet = QPixmap(str(folder / "sprite-sheet-alpha.png"))
+            if sheet.isNull():
+                return
+            layout = manifest["frame_layout"]["rows"]["thinking"]
+            meta = manifest["animation"]["rows"]["thinking"]
+            durations = meta["durations_ms"]
+            if (not isinstance(layout, list) or len(layout) != 6
+                    or meta.get("frames") != 6 or meta.get("loop") is not True
+                    or not isinstance(durations, list) or len(durations) != 6
+                    or any(type(d) is not int or d <= 0 or d > 10000 for d in durations)):
+                return
+            frames = []
+            size = None
+            for rect in layout:
+                x, y, w, h = (rect[k] for k in ("x", "y", "w", "h"))
+                if (any(type(v) is not int for v in (x, y, w, h))
+                        or min(x, y) < 0 or min(w, h) <= 0
+                        or x + w > sheet.width() or y + h > sheet.height()):
+                    return
+                if size is None:
+                    size = (w, h)
+                elif size != (w, h):
+                    return
+                frame = sheet.copy(x, y, w, h)
+                if frame.isNull() or QRegion(frame.mask()).isEmpty():
+                    return
+                frames.append(frame)
+            self.states["thinking"] = {"frames": frames,
+                                       "durations": list(durations), "loop": True}
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            return
 
     def has(self, state: str) -> bool:
         return state in self.states
@@ -48,10 +91,14 @@ class PetWidget(QWidget):
 
     clicked = Signal()
     double_clicked = Signal()
+    drag_started = Signal()
+    context_requested = Signal(QPoint)
 
     GRAVITY = 2600.0       # px/s^2
     BOUNCE = 0.32          # restitution on landing
     GROUND_FRICTION = 0.80
+    MAX_PHYSICS_STEP = 0.05  # avoid jumping across the screen after a stalled timer
+    MAX_THROW_SPEED = 1800.0
 
     def __init__(self, sprites: SpriteBank, display_size: int = 168):
         super().__init__()
@@ -73,6 +120,9 @@ class PetWidget(QWidget):
         self._drag_offset = QPoint(0, 0)
         self._dragging = False
         self._drag_hist: list[tuple[float, QPoint]] = []
+        self._drag_start = QPoint(0, 0)
+        self._drag_max_distance = 0
+        self._drag_started = False
         self._one_shot_done = False
         self.bubble_widget: QWidget | None = None  # set by app
 
@@ -94,6 +144,7 @@ class PetWidget(QWidget):
 
         self._pm_cache: dict = {}    # (state, idx, facing) -> scaled QPixmap
         self._mask_cache: dict = {}  # (state, idx, facing) -> grown QRegion
+        self._mask_blend_next: int | None = None
 
         # spawn: bottom-center of the primary screen's usable area
         geo = QGuiApplication.primaryScreen().availableGeometry()
@@ -136,7 +187,7 @@ class PetWidget(QWidget):
         idx = min(self.frame_idx, n - 1)
         dur = meta["durations"][idx % len(meta["durations"])] * self.time_scale
         nxt = ((idx + 1) % n) if meta["loop"] else (idx + 1 if idx + 1 < n else None)
-        if nxt is None or dur <= 0:
+        if self.state == "still" or nxt is None or dur <= 0 or self.BLEND_MS <= 0:
             return None, 0.0
         blend = min(self.BLEND_MS, dur * 0.35)
         t = (self._frame_elapsed - (dur - blend)) / blend
@@ -165,14 +216,32 @@ class PetWidget(QWidget):
         return x, y, scaled.width(), scaled.height()
 
     def _mask_region(self, idx: int) -> QRegion:
-        key = (self.state, idx, self.facing_left)
+        amplitude = min(max(self.motion_amp, 0.0), 2.0) if math.isfinite(self.motion_amp) else 0.0
+        if self.state == "walk":
+            padding = math.ceil(1.2 * self.display_size * math.sin(math.radians(1.4 * amplitude)) + 2.5 * amplitude + 1) if amplitude else 0
+        elif self.state == "dance":
+            padding = math.ceil(1.2 * self.display_size * math.sin(math.radians(3 * amplitude)) + 1) if amplitude else 0
+        elif self.state in ("idle", "sleep", "liesleep", "drag"):
+            padding = math.ceil(.012 * self.display_size * amplitude + 1) if amplitude else 0
+        else:
+            padding = 0
+        key = (self.state, idx, self.facing_left, padding)
         region = self._mask_cache.get(key)
         if region is None:
             region = QRegion(self._scaled_pm(idx).mask())
-            if self.motion_amp > 0:  # slack for procedural transform wobble
+            if padding:
+                # Expand continuously, not as disconnected shifted outlines.
+                # The bounded margin prevents transformed pixels being clipped
+                # by the native window mask while keeping distant pixels empty.
                 grown = QRegion(region)
-                for dx, dy in ((4, 0), (-4, 0), (0, 4), (0, -4)):
-                    grown |= region.translated(dx, dy)
+                reach = 0
+                while reach < padding:
+                    step = min(2 * reach + 1, padding - reach)
+                    before = QRegion(grown)
+                    grown |= before.translated(step, 0) | before.translated(-step, 0)
+                    before = QRegion(grown)
+                    grown |= before.translated(0, step) | before.translated(0, -step)
+                    reach += step
                 region = grown
             self._mask_cache[key] = region
         return QRegion(region)
@@ -183,6 +252,16 @@ class PetWidget(QWidget):
         idx = min(self.frame_idx, len(meta["frames"]) - 1)
         scaled = self._cur_scaled_pm()
         region = self._mask_region(idx)
+        nxt, t = self._blend_info() if self.crossfade else (None, 0.0)
+        self._mask_blend_next = nxt if t > 0 else None
+        if self._mask_blend_next is not None:
+            # Both images are visible during a fade. Without the union, the
+            # OS clips parts of the incoming sprite to the previous frame.
+            next_scaled = self._scaled_pm(nxt)
+            next_region = self._mask_region(nxt)
+            next_region.translate((scaled.width() - next_scaled.width()) // 2,
+                                  scaled.height() - next_scaled.height())
+            region |= next_region
         x = (self.win_width - scaled.width()) // 2
         y = self.height() - scaled.height()
         region.translate(x, y)
@@ -210,7 +289,11 @@ class PetWidget(QWidget):
         dt_ms = (now - self._last_tick) * 1000.0
         self._last_tick = now
         self._advance_frame(dt_ms)
-        if self.crossfade and self._blend_info()[1] > 0.0:
+        nxt, t = self._blend_info() if self.crossfade else (None, 0.0)
+        blend_next = nxt if t > 0 else None
+        if blend_next != self._mask_blend_next:
+            self._update_mask()
+        if blend_next is not None:
             self.update()
 
     def set_state(self, state: str):
@@ -235,8 +318,9 @@ class PetWidget(QWidget):
     def _proc_fx(self):
         """Continuous transform for a lively feel: (sx, sy, rot_deg, dx, dy)."""
         a = self.motion_amp
-        if a <= 0:
+        if not math.isfinite(a) or a <= 0 or self.state == "still":
             return 1.0, 1.0, 0.0, 0.0, 0.0
+        a = min(a, 2.0)
         st = self.state
         ph = self._cycle_phase()
         if st == "walk":
@@ -245,15 +329,24 @@ class PetWidget(QWidget):
             return 1.0, 1.0, tilt, 0.0, -2.5 * bob * a
         if st == "dance":
             return 1.0, 1.0, math.sin(ph * 2 * math.pi) * 3.0 * a, 0.0, 0.0
-        if st in ("idle", "sleep", "liesleep", "still", "drag"):
+        if st in ("idle", "sleep", "liesleep", "drag"):
             b = math.sin(time.monotonic() * 2.0) * a
             return 1.0 + 0.008 * b, 1.0 + 0.012 * b, 0.0, 0.0, 0.0
         return 1.0, 1.0, 0.0, 0.0, 0.0
 
     def _advance_frame(self, dt_ms: float):
+        if (self.state == "still" or not math.isfinite(dt_ms) or dt_ms <= 0
+                or not math.isfinite(self.time_scale) or self.time_scale <= 0):
+            return
         meta = self.sprites.states[self.state]
+        if self._one_shot_done and not meta["loop"]:
+            return
         self._frame_elapsed += dt_ms
         durations = meta["durations"]
+        if meta["loop"]:
+            cycle = sum(durations[i % len(durations)] for i in range(len(meta["frames"]))) * self.time_scale
+            if cycle > 0 and self._frame_elapsed >= cycle:
+                self._frame_elapsed %= cycle
         changed = False
         while self._frame_elapsed >= \
                 durations[self.frame_idx % len(durations)] * self.time_scale:
@@ -266,13 +359,14 @@ class PetWidget(QWidget):
                     self.frame_idx = 0
                 else:
                     self.frame_idx = len(meta["frames"]) - 1
+                    self._frame_elapsed = 0.0
                     self._one_shot_done = True
                     break
         if changed:
             self._update_mask()
             self.update()
         elif self.motion_amp > 0 and self.state in (
-                "walk", "idle", "dance", "sleep", "liesleep", "still", "drag"):
+                "walk", "idle", "dance", "sleep", "liesleep", "drag"):
             self.update()  # procedural transform animates every tick
 
     def one_shot_finished(self) -> bool:
@@ -300,6 +394,9 @@ class PetWidget(QWidget):
 
     def physics_step(self, dt: float):
         """Integrate gravity toss; returns True once landed and settled."""
+        if not math.isfinite(dt) or dt <= 0:
+            return False
+        dt = min(dt, self.MAX_PHYSICS_STEP)
         self.vy += self.GRAVITY * dt
         pos = self.pos() + QPointF(self.vx * dt, self.vy * dt).toPoint()
         floor = self.ground_y() - self.height()
@@ -323,33 +420,64 @@ class PetWidget(QWidget):
     def mousePressEvent(self, e: QMouseEvent):
         if e.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
-            self._drag_offset = e.globalPosition().toPoint() - self.pos()
-            self._drag_hist = [(time.monotonic(), e.globalPosition().toPoint())]
+            self._drag_start = e.globalPosition().toPoint()
+            self._drag_max_distance = 0
+            self._drag_started = False
+            self._drag_offset = self._drag_start - self.pos()
+            self._drag_hist = [(time.monotonic(), self._drag_start)]
             self.vx = self.vy = 0.0
 
     def mouseMoveEvent(self, e: QMouseEvent):
         if self._dragging:
             gp = e.globalPosition().toPoint()
-            self.move(gp - self._drag_offset)
+            self._drag_max_distance = max(self._drag_max_distance,
+                                          (gp - self._drag_start).manhattanLength())
+            # Keep ordinary click jitter from shifting the pet away from its
+            # floor; once a drag crosses the threshold it follows normally.
+            if self._drag_max_distance >= 8:
+                self._begin_drag()
+                self.move(gp - self._drag_offset)
             self._drag_hist.append((time.monotonic(), gp))
             self._drag_hist = self._drag_hist[-6:]
 
     def mouseReleaseEvent(self, e: QMouseEvent):
         if e.button() != Qt.MouseButton.LeftButton or not self._dragging:
             return
-        self._dragging = False
-        if len(self._drag_hist) >= 2:
+        gp = e.globalPosition().toPoint()
+        self._drag_max_distance = max(self._drag_max_distance,
+                                      (gp - self._drag_start).manhattanLength())
+        # A short, quick pointer wobble is still a click. Track the maximum
+        # distance since the press so a drag out and back is not misclassified.
+        if self._drag_max_distance < 8:
+            self._dragging = False
+            self.vx = self.vy = 0.0
+            self.clicked.emit()
+        else:
+            # The OS may coalesce movement events. Account for a release that
+            # first crosses the drag threshold as well as normal move events.
+            self._begin_drag()
+            self.move(gp - self._drag_offset)
+            self._dragging = False
+            self._drag_hist.append((time.monotonic(), gp))
+            self._drag_hist = self._drag_hist[-6:]
             (t0, p0), (t1, p1) = self._drag_hist[0], self._drag_hist[-1]
             dt = max(t1 - t0, 1e-3)
-            self.vx = (p1.x() - p0.x()) / dt
-            self.vy = (p1.y() - p0.y()) / dt
-            if abs(self.vx) < 60 and abs(self.vy) < 60 and (p1 - p0).manhattanLength() < 8:
-                self.clicked.emit()
-        else:
-            self.clicked.emit()
+            self.vx = max(-self.MAX_THROW_SPEED, min(self.MAX_THROW_SPEED, (p1.x() - p0.x()) / dt))
+            self.vy = max(-self.MAX_THROW_SPEED, min(self.MAX_THROW_SPEED, (p1.y() - p0.y()) / dt))
+
+    def _begin_drag(self):
+        """Notify the controller as soon as movement crosses the threshold."""
+        if not self._drag_started:
+            self._drag_started = True
+            self.drag_started.emit()
 
     def mouseDoubleClickEvent(self, e: QMouseEvent):
         self.double_clicked.emit()
+
+    def contextMenuEvent(self, e):
+        """Open the same motion menu as the tray without starting a drag."""
+        self.context_requested.emit(e.globalPos())
+        e.accept()
 
     # ---------- paint ----------
 
@@ -357,9 +485,34 @@ class PetWidget(QWidget):
         p.drawPixmap((self.win_width - scaled.width()) // 2,
                      self.height() - scaled.height(), scaled)
 
+    def _crossfaded_pixmap(self, idx: int, nxt: int, t: float) -> QPixmap:
+        """Cross-dissolve premultiplied images without dark/opaque trails."""
+        current = self._scaled_pm(idx)
+        incoming = self._scaled_pm(nxt)
+        def weighted(source: QPixmap, weight: float) -> QPixmap:
+            image = source.copy()
+            painter = QPainter(image)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+            painter.fillRect(image.rect(), QColor(0, 0, 0, round(255 * weight)))
+            painter.end()
+            return image
+        canvas = weighted(current, 1.0 - t)
+        overlay = weighted(incoming, t)
+        painter = QPainter(canvas)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+        painter.drawPixmap((current.width() - incoming.width()) // 2,
+                           current.height() - incoming.height(), overlay)
+        painter.end()
+        return canvas
+
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        # The previous frame may occupy different pixels on a translucent
+        # window; clear them before drawing the next frame.
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         sx, sy, rot, dx, dy = self._proc_fx()
         if sx != 1.0 or sy != 1.0 or rot or dx or dy:
             rx, ry, rw, rh = self._sprite_draw_rect()
@@ -370,12 +523,9 @@ class PetWidget(QWidget):
             p.translate(-rx - rw / 2, -ry - rh)
         meta = self.sprites.states[self.state]
         idx = min(self.frame_idx, len(meta["frames"]) - 1)
-        self._draw_scaled(p, self._scaled_pm(idx))
-        if self.crossfade:
-            nxt, t = self._blend_info()
-            if nxt is not None and t > 0.0:
-                p.setOpacity(t)
-                self._draw_scaled(p, self._scaled_pm(nxt))
+        nxt, t = self._blend_info() if self.crossfade else (None, 0.0)
+        frame = self._crossfaded_pixmap(idx, nxt, t) if nxt is not None and t > 0 else self._scaled_pm(idx)
+        self._draw_scaled(p, frame)
         p.end()
 
     def showEvent(self, e):

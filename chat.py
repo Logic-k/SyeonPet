@@ -1,135 +1,145 @@
-"""Chat panel — a small always-on-top window that docks beside the pet.
-
-Sends through the brain from providers.make_brain(): a real LLM when an API
-key is configured, otherwise the offline canned responder. Replies land in
-the panel and the pet celebrates briefly.
-"""
+"""Prompt conversation window positioned beside the desktop pet."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QHBoxLayout, QLineEdit, QPushButton,
-                               QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider,
+                               QVBoxLayout, QWidget)
 
-from providers import DEFAULT_PERSONA, make_brain
-
-
-class _Worker(QThread):
-    done = Signal(str)
-    failed = Signal(str)
-
-    def __init__(self, brain, history, text, persona, parent=None):
-        super().__init__(parent)
-        self._args = (brain, history, text, persona)
-
-    def run(self):
-        brain, history, text, persona = self._args
-        try:
-            self.done.emit(brain.reply(history, text, persona))
-        except Exception as e:  # network/auth/quota — show, don't crash
-            self.failed.emit(str(e))
+from optimizer_chat import PromptConversation
 
 
 class ChatPanel(QWidget):
-    def __init__(self, pet, behavior, cfg: dict):
+    """One editable conversation; closing the window leaves its draft intact."""
+
+    MIN_OPACITY = 60
+    MAX_OPACITY = 100
+
+    def __init__(self, pet, behavior, cfg: dict, prompt_open=None, settings=None):
         super().__init__()
         self.pet = pet
         self.behavior = behavior
-        self.brain = make_brain(cfg)
-        c = cfg.get("chat", {}) or {}
-        self.persona = (c.get("persona") or DEFAULT_PERSONA)
-        self.history: list[dict] = []
-        self._worker: _Worker | None = None
+        # Kept separate from the existing pet config and prompt library.
+        self._settings = settings if settings is not None else QSettings("SyeonPet", "Conversation")
 
-        self.setWindowTitle("션과 대화")
-        self.setWindowFlags(Qt.WindowType.Tool
-                            | Qt.WindowType.WindowStaysOnTopHint)
-        self.setFixedSize(320, 400)
+        self.setWindowTitle("션과 프롬프트 정리")
+        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        self.setMinimumSize(360, 450)
+        self.resize(460, 650)
 
-        self.view = QTextBrowser()
-        self.view.setStyleSheet(
-            "QTextBrowser { background: #fffdf8; border: none; font-size: 13px; }")
-        self.input = QLineEdit()
-        self.input.setPlaceholderText("션에게 말 걸기…")
-        self.input.returnPressed.connect(self._send)
-        self.btn = QPushButton("전송")
-        self.btn.clicked.connect(self._send)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
 
-        row = QHBoxLayout()
-        row.addWidget(self.input, 1)
-        row.addWidget(self.btn)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.addWidget(self.view, 1)
-        lay.addLayout(row)
+        opacity_row = QHBoxLayout()
+        opacity_row.addStretch()
+        opacity_label = QLabel("창 불투명도")
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setAccessibleName("대화창 불투명도")
+        self.opacity_slider.setToolTip("대화창의 불투명도를 조절합니다.")
+        self.opacity_slider.setRange(self.MIN_OPACITY, self.MAX_OPACITY)
+        self.opacity_slider.setMaximumWidth(120)
+        self.opacity_slider.setSingleStep(5)
+        self.opacity_value = QLabel()
+        self.opacity_value.setMinimumWidth(38)
+        opacity_label.setBuddy(self.opacity_slider)
+        opacity_row.addWidget(opacity_label)
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_value)
+        layout.addLayout(opacity_row)
 
-        self._append("션", self._greeting())
+        sleep_row = QHBoxLayout()
+        self.sleep_notice = QLabel("션이 완전히 자고 있어요. 깨우면 대화를 이어갈 수 있어요.")
+        self.sleep_notice.setWordWrap(True)
+        self.wake_button = QPushButton("션 깨우기")
+        self.wake_button.clicked.connect(self.behavior.wake)
+        sleep_row.addWidget(self.sleep_notice, 1)
+        sleep_row.addWidget(self.wake_button)
+        layout.addLayout(sleep_row)
 
-    def _greeting(self) -> str:
-        if self.brain.name == "canned":
-            return ("안녕하세요! 션이에요 🌱 지금은 간단한 대답만 할 수 있어요. "
-                    "config.json에 Gemini/Groq API 키를 넣으면 진짜 AI로 "
-                    "대화할 수 있어요!")
-        return "안녕하세요! 션이에요 🌱 무엇이든 물어보세요!"
+        self.prompt_conversation = PromptConversation(self)
+        layout.addWidget(self.prompt_conversation)
+        self.behavior.fully_asleep_changed.connect(self._sleep_changed)
+        self._sleep_changed(self.behavior.fully_asleep)
 
-    def _append(self, who: str, text: str):
-        me = who == "나"
-        color = "#5a4637" if me else "#2b6cb0"
-        bg = "#f2e9dd" if me else "#e8f1fb"
-        align = "right" if me else "left"
-        self.view.append(
-            f"<div style='margin:4px 0; text-align:{align}'>"
-            f"<span style='font-size:10px; color:{color}'>{who}</span><br>"
-            f"<span style='background:{bg}; border-radius:8px; "
-            f"padding:5px 9px; display:inline-block; max-width:230px; "
-            f"text-align:left'>{text}</span></div>")
-        sb = self.view.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        try:
+            saved = int(self._settings.value("opacityPercent", self.MAX_OPACITY))
+        except (TypeError, ValueError, OverflowError):
+            saved = self.MAX_OPACITY
+        self.opacity_slider.setValue(max(self.MIN_OPACITY, min(self.MAX_OPACITY, saved)))
+        self._apply_opacity(self.opacity_slider.value(), persist=False)
+        self.opacity_slider.valueChanged.connect(self._set_opacity)
 
-    def _send(self):
-        text = self.input.text().strip()
-        if not text or (self._worker and self._worker.isRunning()):
+    def _apply_opacity(self, value: int, persist: bool):
+        value = max(self.MIN_OPACITY, min(self.MAX_OPACITY, int(value)))
+        self.setWindowOpacity(value / 100.0)
+        self.opacity_value.setText(f"{value}%")
+        if persist:
+            self._settings.setValue("opacityPercent", value)
+
+    def _set_opacity(self, value: int):
+        self._apply_opacity(value, persist=True)
+
+    def _sleep_changed(self, paused: bool):
+        self.sleep_notice.setVisible(paused)
+        self.wake_button.setVisible(paused)
+        self.prompt_conversation.set_sleep_paused(paused)
+
+    @property
+    def is_busy(self) -> bool:
+        return self.prompt_conversation.is_busy
+
+    def has_pending_work(self) -> bool:
+        return self.prompt_conversation.has_pending_work()
+
+    def request_app_quit(self, callback):
+        """Confirm before terminating a request or discarding in-memory work."""
+        if not self.is_busy and not self.has_pending_work():
+            callback()
             return
-        self.input.clear()
-        self._append("나", text)
-        self._append("션", "<i>생각 중…</i>")
-        self._worker = _Worker(self.brain, list(self.history), text,
-                               self.persona, self)
-        self._worker.done.connect(lambda r: self._finish(text, r))
-        self._worker.failed.connect(self._fail)
-        self._worker.start()
+        if getattr(self, "_quit_dialog", None) is not None:
+            return
+        if not self.isVisible():
+            self.show_near_pet()
+        conversation = self.prompt_conversation
+        snapshot = conversation.quit_snapshot()
+        was_busy = self.is_busy
+        message = ("종료하면 현재 대화와 작성 중인 내용이 사라집니다. "
+                   "필요한 내용은 보관함에 저장하거나 복사해 주세요.")
+        if was_busy:
+            message += "\n진행 중인 요청도 중단될 수 있습니다."
+        dialog = QMessageBox(QMessageBox.Icon.Question, "션 종료", message,
+                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        self._quit_dialog = dialog
 
-    def _pop_thinking(self):
-        html = self.view.toHtml()
-        i = html.rfind("생각 중…")
-        if i != -1:
-            html = html[:html.rfind("<div", 0, i)] + "</body></html>"
-            self.view.setHtml(html)
+        def finished(result):
+            self._quit_dialog = None
+            if result != QMessageBox.StandardButton.Yes:
+                return
+            if self.is_busy != was_busy or conversation.quit_snapshot() != snapshot:
+                conversation.status.setText("확인 중 대화 상태가 바뀌어 종료하지 않았어요. 내용을 다시 확인해 주세요.")
+                return
+            callback()
 
-    def _finish(self, user_text: str, reply: str):
-        self._pop_thinking()
-        self._append("션", reply)
-        self.history.append({"role": "user", "text": user_text})
-        self.history.append({"role": "assistant", "text": reply})
-        self.history = self.history[-20:]
-        if self.behavior.mode in ("idle", "sleep"):
-            self.behavior.play_one_shot("wave")
-
-    def _fail(self, err: str):
-        self._pop_thinking()
-        self._append("션", f"미안해요, 연결이 안 됐어요… ({err[:120]})")
+        dialog.finished.connect(finished)
+        dialog.open()
 
     def show_near_pet(self):
         geo = self.pet.sprite_rect_global()
-        screen = QGuiApplication.screenAt(geo.center()) \
-            or QGuiApplication.primaryScreen()
-        b = screen.availableGeometry()
+        screen = QGuiApplication.screenAt(geo.center()) or QGuiApplication.primaryScreen()
+        bounds = screen.availableGeometry()
+        self.resize(min(self.width(), bounds.width()), min(self.height(), bounds.height()))
         x = geo.right() + 8
-        if x + self.width() > b.right():
+        if x + self.width() > bounds.right():
             x = geo.left() - 8 - self.width()
-        x = max(b.left() + 4, min(x, b.right() - self.width() - 4))
-        y = max(b.top() + 4, min(geo.top() - 20, b.bottom() - self.height() - 4))
+        x = max(bounds.left() + 4, min(x, bounds.right() - self.width() - 4))
+        y = max(bounds.top() + 4, min(geo.top() - 20, bounds.bottom() - self.height() - 4))
         self.move(x, y)
         self.show()
         self.raise_()
-        self.input.setFocus()
+        (self.wake_button if self.behavior.fully_asleep else self.prompt_conversation.input).setFocus()
+
+    def show_prompt_near_pet(self):
+        """Compatibility for existing tray actions; there is only one view."""
+        self.show_near_pet()

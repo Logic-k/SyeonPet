@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "kind": "sprite-gen-request",
+  "engine": "component-row",
+  "character": {
+    "id": "syeon",
+    "description": "",
+    "base_image": "base-source.png"
+  },
+  "cell": {
+    "shape": "square",
+    "width": 256,
+    "height": 256,
+    "safe_margin_x": 22,
+    "safe_margin_y": 22,
+    "size": 256,
+    "safe_margin": 22
+  },
+  "chroma_key": {
+    "name": "cyan",
+    "hex": "#00FFFF",
+    "rgb": [
+      0,
+      255,
+      255
+    ],
+    "selection": "auto",
+    "score": 221.1,
+    "min_subject_distance": 196.26,
+    "background": {
+      "mode": "transparent",
+      "opaque_border_fraction": 0.0,
+      "subject_pixels": 9089
+    },
+    "candidates": [
+      {
+        "name": "magenta",
+        "hex": "#FF00FF",
+        "score": 176.78,
+        "min_subject_distance": 133.83,
+        "clears_erase_radius": true
+      },
+      {
+        "name": "green",
+        "hex": "#00FF00",
+        "score": 104.11,
+        "min_subject_distance": 82.52,
+        "clears_erase_radius": false
+      },
+      {
+        "name": "cyan",
+        "hex": "#00FFFF",
+        "score": 221.1,
+        "min_subject_distance": 196.26,
+        "clears_erase_radius": true
+      },
+      {
+        "name": "blue",
+        "hex": "#004DFF",
+        "score": 217.55,
+        "min_subject_distance": 158.17,
+        "clears_erase_radius": true
+      }
+    ],
+    "selection_reason": "highest 1st-percentile subject distance among the 3 candidate(s) clearing the 96 erase radius"
+  },
+  "states": {
+    "thinking": {
+      "frames": 6,
+      "fps": 4,
+      "loop": true,
+      "action": "subtle thoughtful head tilt and wing to cheek, then return to neutral, feet planted"
+    }
+  },
+  "style": "clean flat vector-style mascot illustration, thick uniform dark-brown outline, soft pastel fills, plain solid background",
+  "layout": "taxonomy/v1",
+  "fit": {
+    "pixel_unfake": false,
+    "resample": "lanczos",
+    "align_x": "foot-centroid",
+    "align_y": "bottom",
+    "segmentation": "components"
+  },
+  "chroma": {
+    "mode": "rgb",
+    "unmix_reach": 4,
+    "spill_max_fraction": 0.005
+  }
+}

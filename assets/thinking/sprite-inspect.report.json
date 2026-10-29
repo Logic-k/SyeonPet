@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "engine": "component-row",
+  "kind": "sprite-gen-inspect-report",
+  "run_dir": "[local temporary run]",
+  "states": [
+    "thinking"
+  ],
+  "thresholds": {
+    "histogram_min": 0.0,
+    "dhash_min": 0.55,
+    "motion_min": 0.01
+  },
+  "rows": [
+    {
+      "state": "thinking",
+      "source": "frames",
+      "expected_frames": 6,
+      "found_frames": 6,
+      "natural_pose_count": 6,
+      "frame_files": [
+        "frames/thinking/frame-0.png",
+        "frames/thinking/frame-1.png",
+        "frames/thinking/frame-2.png",
+        "frames/thinking/frame-3.png",
+        "frames/thinking/frame-4.png",
+        "frames/thinking/frame-5.png"
+      ],
+      "metrics": {
+        "histogram_intersection": {
+          "min": 0.9458146990729264,
+          "mean": 0.9684789984348371
+        },
+        "dhash_similarity": {
+          "min": 0.796875,
+          "mean": 0.9
+        },
+        "motion_presence": 0.04829230813419117,
+        "centroid_sigma": {
+          "x": 3.923687701166922,
+          "y": 0.6330887609536918
+        }
+      },
+      "ok": true,
+      "errors": [],
+      "warnings": []
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

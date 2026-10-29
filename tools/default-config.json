@@ -1,0 +1,20 @@
+{
+  "display_size": 150,
+  "walk_speed": 190,
+  "start_onboarding_on_launch": true,
+  "ambient_chatter": true,
+  "ambient_lines": [
+    "오늘도 좋은 하루 보내세요!",
+    "잠깐 스트레칭 어때요?",
+    "물 한 잔 마실 시간이에요."
+  ],
+  "onboarding_steps": [
+    {"title": "안녕하세요!", "text": "션이에요. 바탕화면에서 프롬프트 정리를 도와드릴게요.", "anchor": "center"},
+    {"title": "션과 대화하기", "text": "트레이 메뉴 또는 션의 메뉴에서 프롬프트 정리를 열 수 있어요.", "anchor": "left"},
+    {"title": "안전하게 사용하기", "text": "외부 AI에 보내기 전에는 개인정보와 기관의 사용 지침을 확인해 주세요.", "anchor": "center"}
+  ],
+  "calm_mode": false,
+  "click_actions": {"click": "wave", "double_click": "sleep"},
+  "frame_blend_ms": 0,
+  "motion_amplitude": 0.8
+}

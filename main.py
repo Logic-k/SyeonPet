@@ -7,15 +7,16 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QAction, QActionGroup, QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtCore import QPoint, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication, QIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from behavior import BehaviorController
 from bubble import SpeechBubble
 from chat import ChatPanel
 from onboarding import OnboardingTour
 from pet import ASSETS, PetWidget, SpriteBank
+from update_checker import UpdateChecker
 
 ROOT = Path(__file__).parent
 # frozen exe: config.json next to SyeonPet.exe wins; bundled copy is the fallback
@@ -23,6 +24,57 @@ CONFIG_PATH = (Path(sys.executable).parent / "config.json"
                if getattr(sys, "frozen", False) else ROOT / "config.json")
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 APP_NAME = "SyeonPet"
+
+
+def popup_pet_menu(menu: QMenu, pet: PetWidget, position: QPoint) -> None:
+    """Show the tray menu beside the pet, inside the current work area."""
+    screen = (QGuiApplication.screenAt(position) or pet.screen()
+              or QGuiApplication.primaryScreen())
+    if screen is not None:
+        area = screen.availableGeometry()
+        size = menu.sizeHint()
+        x = max(area.left(), min(position.x(), area.right() - size.width() + 1))
+        y = max(area.top(), min(position.y(), area.bottom() - size.height() + 1))
+        position = QPoint(x, y)
+    # popup() avoids starting another event loop; the tray and pet share the
+    # very same menu/actions so their checked states stay synchronized.
+    menu.popup(position)
+
+
+def bind_pet_menu(pet: PetWidget, menu: QMenu) -> None:
+    pet.context_requested.connect(lambda position: popup_pet_menu(menu, pet, position))
+
+
+def present_update_result(result: dict, tray: QSystemTrayIcon, dialogs: list) -> None:
+    """Keep startup failures quiet; open an update page only on user action."""
+    status = result.get("status")
+    if not result.get("manual"):
+        if status == "available":
+            tray.showMessage("션 업데이트", result.get("message", "새 버전이 있습니다."))
+        return
+
+    release_url = QUrl(result.get("release_url", ""))
+    official_release = (release_url.scheme() == "https"
+                        and release_url.host().lower() == "github.com"
+                        and not release_url.userInfo()
+                        and release_url.port() in (-1, 443)
+                        and release_url.path().startswith("/Logic-k/SyeonPet/releases/tag/")
+                        and not release_url.query() and not release_url.fragment())
+    if status == "available" and official_release:
+        box = QMessageBox(QMessageBox.Icon.Information, "션 업데이트",
+                          result.get("message", "새 버전이 있습니다.") +
+                          "\n공식 GitHub 릴리스 페이지를 열까요?",
+                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.finished.connect(lambda value: QDesktopServices.openUrl(release_url)
+                             if value == QMessageBox.StandardButton.Yes else None)
+    else:
+        box = QMessageBox(QMessageBox.Icon.Information, "션 업데이트 확인",
+                          result.get("message", "업데이트를 확인하지 못했습니다."),
+                          QMessageBox.StandardButton.Ok)
+    dialogs.append(box)
+    box.finished.connect(lambda _value: dialogs.remove(box))
+    box.open()
 
 
 def load_config() -> dict:
@@ -84,6 +136,8 @@ def main() -> int:
     tour = OnboardingTour(pet, behavior, bubble,
                           cfg.get("onboarding_steps", []))
     chat_panel = ChatPanel(pet, behavior, cfg)
+    chat_panel.prompt_conversation.busy_changed.connect(
+        lambda busy: behavior.begin_thinking() if busy else behavior.end_thinking())
     pet.show()
 
     # ---------- ambient chatter ----------
@@ -119,17 +173,25 @@ def main() -> int:
     tray = QSystemTrayIcon(QIcon(str(ASSETS / "base-source.png")))
     tray.setToolTip("션 데스크탑 펫")
     menu = QMenu()
+    update_checker = UpdateChecker(parent=app)
+    update_dialogs: list = []
+    update_checker.completed.connect(
+        lambda result: present_update_result(result, tray, update_dialogs))
 
     def toggle_tour():
-        tour.finish() if tour.active else tour.start()
+        if tour.active:
+            tour.finish()
+        else:
+            behavior.wake()
+            tour.start()
 
     act_tour = QAction("온보딩 시작 / 중지")
     act_tour.triggered.connect(toggle_tour)
     menu.addAction(act_tour)
 
-    act_chat = QAction("션과 대화하기")
-    act_chat.triggered.connect(chat_panel.show_near_pet)
-    menu.addAction(act_chat)
+    act_prompt = QAction("프롬프트 정리 열기")
+    act_prompt.triggered.connect(chat_panel.show_prompt_near_pet)
+    menu.addAction(act_prompt)
 
     act_wander = QAction("돌아다니기")
     act_wander.triggered.connect(behavior.wander)
@@ -143,9 +205,7 @@ def main() -> int:
     menu.addAction(act_calm)
 
     act_sleep = QAction("재우기 / 깨우기")
-    act_sleep.triggered.connect(
-        lambda: behavior.idle(1.0) if behavior.mode in ("sleep", "deepsleep")
-        else behavior.sleep())
+    act_sleep.triggered.connect(behavior.toggle_sleep)
     menu.addAction(act_sleep)
 
     act_liesleep = QAction("누워서 재우기")
@@ -153,8 +213,24 @@ def main() -> int:
     menu.addAction(act_liesleep)
 
     act_still = QAction("완전히 가만히 재우기")
-    act_still.triggered.connect(behavior.still_sleep)
+    def sleep_completely():
+        if tour.active:
+            tour.finish()
+        behavior.still_sleep()
+    act_still.triggered.connect(sleep_completely)
     menu.addAction(act_still)
+
+    act_blend = QAction("프레임 부드럽게 전환")
+    act_blend.setCheckable(True)
+    act_blend.setChecked(pet.crossfade)
+    def set_frame_blending(enabled):
+        if enabled and pet.BLEND_MS <= 0:
+            pet.BLEND_MS = 30.0
+        pet.crossfade = enabled
+        pet._update_mask()
+        pet.update()
+    act_blend.triggered.connect(set_frame_blending)
+    menu.addAction(act_blend)
 
     act_celebrate = QAction("축하하기")
     act_celebrate.triggered.connect(
@@ -214,15 +290,23 @@ def main() -> int:
         menu.addAction(act_auto)
 
     menu.addSeparator()
+    act_update = QAction("업데이트 확인")
+    act_update.triggered.connect(lambda: update_checker.check(manual=True))
+    menu.addAction(act_update)
+
     act_quit = QAction("종료")
-    act_quit.triggered.connect(app.quit)
+    act_quit.triggered.connect(lambda: chat_panel.request_app_quit(app.quit))
     menu.addAction(act_quit)
 
     tray.setContextMenu(menu)
+    bind_pet_menu(pet, menu)
     tray.show()
+    # A background metadata lookup only; it never installs or replaces files.
+    QTimer.singleShot(2500, lambda: update_checker.check(manual=False))
 
     if cfg.get("start_onboarding_on_launch", False):
-        QTimer.singleShot(1200, tour.start)
+        # Do not start an automatic tour after the user explicitly put 션 to sleep.
+        QTimer.singleShot(1200, lambda: None if behavior.fully_asleep else tour.start())
 
     return app.exec()
 
