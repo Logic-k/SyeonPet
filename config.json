@@ -1,0 +1,54 @@
+{
+  "display_size": 150,
+  "walk_speed": 190,
+  "start_onboarding_on_launch": true,
+  "ambient_chatter": true,
+  "chat": {
+    "provider": "canned",
+    "api_key": "",
+    "model": "gemini-2.5-flash",
+    "base_url": "https://api.groq.com/openai/v1",
+    "persona": ""
+  },
+  "ambient_lines": [
+    "오늘도 좋은 하루 보내세요!",
+    "잠깐 스트레칭 어때요?",
+    "물 한 잔 마실 시간이에요.",
+    "부산교육과 함께 힘내요!",
+    "무엇을 도와드릴까요?"
+  ],
+  "onboarding_steps": [
+    {
+      "title": "안녕하세요!",
+      "text": "부산교육청 마스코트 '션'이에요. 처음 만나는 시스템이 낯설 수 있죠. 제가 바닥을 누비며 하나씩 안내해 드릴게요.",
+      "anchor": "center"
+    },
+    {
+      "title": "저는 돌아다녀요",
+      "text": "평소엔 화면 아래를 왔다 갔다 해요. 절 꾹 눌러 데리고 다니거나, 두 번 눌러 축하 인사를 시킬 수도 있어요.",
+      "anchor": "left"
+    },
+    {
+      "title": "트레이 메뉴",
+      "text": "작업 표시줄 오른쪽 트레이 아이콘에서 온보딩 다시 보기, 재우기, 클릭 통과 모드를 켜고 끌 수 있어요.",
+      "anchor": "right"
+    },
+    {
+      "title": "방해하지 않아요",
+      "text": "일하실 때 제가 거슬리면 '클릭 통과 모드'를 켜 주세요. 클릭이 제 몸을 그대로 지나가서 뒤의 창을 누를 수 있어요.",
+      "anchor": "center"
+    },
+    {
+      "title": "준비 끝!",
+      "text": "이제 편하게 사용해 보세요. 다시 보고 싶으면 트레이 메뉴에서 '온보딩 시작'을 눌러 주세요.",
+      "anchor": "center"
+    }
+  ],
+  "calm_mode": false,
+  "click_actions": {
+    "click": "wave",
+    "double_click": "sleep"
+  },
+  "frame_blend_ms": 0,
+  "motion_amplitude": 0.8
+}
