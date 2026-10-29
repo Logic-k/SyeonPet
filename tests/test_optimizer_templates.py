@@ -6,7 +6,9 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPoint
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from optimizer_templates import filter_templates, load_templates, show_template_picker
 
@@ -49,6 +51,41 @@ class TemplateTests(unittest.TestCase):
         dialog.list.setCurrentRow(0)
         dialog.cancel_button.click()
         self.assertEqual(chosen, [])
+
+    def test_small_picker_keeps_editing_and_confirmation_reachable(self):
+        chosen = []
+        dialog = show_template_picker(on_selected=chosen.append)
+        dialog.resize(360, 450)
+        dialog.list.setCurrentRow(0)
+        self.app.processEvents()
+        scroll = dialog.findChild(QScrollArea, "templateScroll")
+        scroll.ensureWidgetVisible(dialog.preview, 0, 0)
+        self.app.processEvents()
+        preview_bottom = dialog.preview.mapTo(scroll.viewport(), QPoint(0, dialog.preview.height())).y()
+        button_bottom = dialog.select_button.mapTo(dialog, QPoint(0, dialog.select_button.height())).y()
+        # Qt's frame can extend a few pixels past the viewport edge.
+        self.assertLessEqual(preview_bottom, scroll.viewport().height() + 4)
+        self.assertLessEqual(button_bottom, dialog.height())
+        dialog.preview.setPlainText("수정한 초안")
+        dialog.select_button.click()
+        self.assertEqual(chosen, ["수정한 초안"])
+
+    def test_large_font_allows_horizontal_access_in_narrow_window(self):
+        previous_font = self.app.font()
+        try:
+            self.app.setFont(QFont("Arial", 18))
+            dialog = show_template_picker()
+            dialog.resize(360, 450)
+            self.app.processEvents()
+            scroll = dialog.findChild(QScrollArea, "templateScroll")
+            scroll.ensureWidgetVisible(dialog.category, 0, 0)
+            self.app.processEvents()
+            category_right = dialog.category.mapTo(
+                scroll.viewport(), QPoint(dialog.category.width(), 0)).x()
+            self.assertLessEqual(category_right, scroll.viewport().width() + 4)
+            dialog.cancel_button.click()
+        finally:
+            self.app.setFont(previous_font)
 
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@ from __future__ import annotations
 import re
 import threading
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
-                               QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
+                               QMessageBox, QPushButton, QTextEdit, QToolButton, QVBoxLayout,
                                QWidget)
 
 from optimizer_core import TASKS, create_offline_prompt, review_result, validate_input
@@ -24,6 +24,7 @@ class _StatusText(QTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setAccessibleName("정리 상태와 확인 사항")
+        self.setToolTip("긴 안내는 이 영역에서 스크롤해 읽을 수 있습니다.")
         self.setMinimumHeight(44)
         self.setMaximumHeight(60)
         self.setPlainText(text)
@@ -48,9 +49,50 @@ class PromptConversation(QWidget):
     """Keep every source and result available while a user refines a request."""
 
     busy_changed = Signal(bool)
+    notice_raised = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("promptConversation")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # Explicit foregrounds and surfaces keep editors readable with either
+        # the Windows light or dark system palette. The window opacity remains
+        # controlled by ChatPanel and does not change the stored document text.
+        self.setStyleSheet("""
+            QWidget#promptConversation { background: #f3f6fa; }
+            QWidget#promptConversation > QLabel { color: #172b3a; }
+            QWidget#promptConversation > QLabel#sectionTitle { color: #172b3a; font-weight: 600; }
+            QWidget#promptConversation > QLabel#providerNote { color: #344e60; }
+            QWidget#promptConversation > QLabel#inlineNotice { background: #fff1ed;
+                color: #722c1d; border: 1px solid #c38170; border-radius: 4px; padding: 4px 6px; }
+            QWidget#promptConversation > QTextEdit, QWidget#promptConversation > QComboBox {
+                background: #ffffff; color: #172b3a;
+                border: 1px solid #9aaebc; border-radius: 4px; padding: 4px;
+                selection-background-color: #195b83; selection-color: #ffffff;
+            }
+            QWidget#promptConversation > QTextEdit:focus, QWidget#promptConversation > QComboBox:focus { border: 2px solid #195b83; padding: 3px; }
+            QWidget#promptConversation > QTextEdit:disabled, QWidget#promptConversation > QComboBox:disabled { background: #e9eef2; color: #425a6a; }
+            QWidget#promptConversation > QTextEdit#statusText { background: #eaf1f6; color: #172b3a; }
+            QWidget#promptConversation > QTextEdit QScrollBar:vertical { background: #e5edf2; width: 11px; margin: 0; }
+            QWidget#promptConversation > QTextEdit QScrollBar::handle:vertical { background: #6a8394; min-height: 20px; border-radius: 5px; }
+            QWidget#promptConversation > QTextEdit QScrollBar::add-line:vertical, QWidget#promptConversation > QTextEdit QScrollBar::sub-line:vertical { height: 0; }
+            QWidget#promptConversation > QComboBox QAbstractItemView { background: #ffffff; color: #172b3a;
+                selection-background-color: #195b83; selection-color: #ffffff; }
+            QWidget#promptConversation > QPushButton { background: #ffffff; color: #172b3a;
+                border: 1px solid #8fa5b4; border-radius: 4px; padding: 4px 7px; }
+            QWidget#promptConversation > QPushButton:hover { background: #e6f0f6; }
+            QWidget#promptConversation > QPushButton:focus { border: 2px solid #195b83; padding: 3px 6px; }
+            QWidget#promptConversation > QPushButton:disabled { background: #e9eef2; color: #526a79; border-color: #afbec8; }
+            QWidget#promptConversation > QPushButton#primaryAction { background: #195b83; color: #ffffff;
+                border: 1px solid #195b83; font-weight: 600; }
+            QWidget#promptConversation > QPushButton#primaryAction:hover { background: #124967; }
+            QWidget#promptConversation > QPushButton#primaryAction:disabled { background: #d5e0e6; color: #425a6a;
+                border-color: #afbec8; }
+            QWidget#promptConversation > QToolButton { color: #195b83; background: transparent; border: none;
+                padding: 2px 4px; }
+            QWidget#promptConversation > QToolButton:hover { background: #e2edf4; }
+            QWidget#promptConversation > QToolButton:focus { border: 1px solid #195b83; }
+        """)
         self.original = ""
         self.revisions: list[str] = []
         self.results: list[str] = []
@@ -64,6 +106,7 @@ class PromptConversation(QWidget):
 
         self.conversation = QTextEdit()
         self.conversation.setReadOnly(True)
+        self.conversation.setMinimumHeight(50)
         self.conversation.setAccessibleName("션과 나눈 프롬프트 대화")
         self.conversation.setPlaceholderText("요청을 적어 주시면 션이 정리를 도와드려요.")
         self.conversation.setPlainText("션: 어떤 요청을 정리할까요?\n처음에는 원하는 일을 적고, 이후에는 추가 조건을 말씀해 주세요.")
@@ -73,8 +116,11 @@ class PromptConversation(QWidget):
         self.provider.addItem("기본 정리 (AI 사용 안 함)", "offline")
         self.provider.addItem("AI 정리 · Vireonix", "vireonix")
         self.provider.addItem("AI 정리 · Pollinations Classic", "pollinations-classic")
+        self.provider.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.provider.setMinimumContentsLength(12)
         self.provider.currentIndexChanged.connect(self._provider_changed)
         self.provider_note = QLabel()
+        self.provider_note.setObjectName("providerNote")
         self.provider_note.setWordWrap(True)
         self._provider_changed()
         self.task = QComboBox()
@@ -92,9 +138,17 @@ class PromptConversation(QWidget):
         self.input.setPlaceholderText("요청이나 추가 조건을 적어 주세요")
         self.input.setMinimumHeight(65)
         self.input.setMaximumHeight(110)
+        self.inline_notice = QLabel()
+        self.inline_notice.setObjectName("inlineNotice")
+        self.inline_notice.setAccessibleName("요청 오류 안내")
+        self.inline_notice.setTextFormat(Qt.TextFormat.PlainText)
+        self.inline_notice.setWordWrap(True)
+        self.inline_notice.hide()
+        self.input.textChanged.connect(self.inline_notice.hide)
         self.send = QPushButton("션에게 보내기")
+        self.send.setObjectName("primaryAction")
         self.send.clicked.connect(self.submit)
-        self.template = QPushButton("업무·일반 템플릿")
+        self.template = QPushButton("템플릿")
         self.template.setToolTip("교육지원청 업무와 일반 용도의 예시를 검색해 입력란에 넣습니다.")
         self.template.clicked.connect(self._insert_template)
         self.reset = QPushButton("새 요청")
@@ -106,43 +160,90 @@ class PromptConversation(QWidget):
         self.result_choice.setAccessibleName("이전 정리 결과 선택")
         self.result_choice.currentIndexChanged.connect(self._select_result)
         self.result = QTextEdit()
+        self.result.setMinimumHeight(60)
         self.result.setAccessibleName("정리한 프롬프트 편집")
         self.result.setPlaceholderText("정리한 결과가 여기에 표시됩니다. 직접 수정할 수 있어요.")
         self.copy = QPushButton("결과 복사")
         self.copy.clicked.connect(self._copy_result)
         self.status = _StatusText("기본 정리는 입력을 구조화하며 AI 재작성은 하지 않습니다.")
+        self.status.setObjectName("statusText")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(5)
-        layout.addWidget(QLabel("션과 대화"))
-        layout.addWidget(self.conversation, 2)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(3)
+        self.conversation_label = QLabel("션과 프롬프트 정리")
+        self.conversation_label.setObjectName("sectionTitle")
+        self.conversation_label.setBuddy(self.conversation)
+        self.history_toggle = QToolButton()
+        self.history_toggle.setText("대화 기록 보기")
+        self.history_toggle.setCheckable(True)
+        self.history_toggle.setChecked(False)
+        self.history_toggle.setAccessibleName("대화 기록 표시")
+        self.history_toggle.toggled.connect(self._toggle_history)
+        self.conversation.hide()
+        history_row = QHBoxLayout()
+        history_row.addWidget(self.conversation_label)
+        history_row.addStretch()
+        history_row.addWidget(self.history_toggle)
+        layout.addLayout(history_row)
+        layout.addWidget(self.conversation, 1)
         row = QHBoxLayout()
-        row.addWidget(QLabel("정리 방식"))
+        provider_label = QLabel("정리 방식")
+        provider_label.setBuddy(self.provider)
+        row.addWidget(provider_label)
         row.addWidget(self.provider, 1)
         layout.addLayout(row)
         layout.addWidget(self.provider_note)
         row = QHBoxLayout()
-        row.addWidget(QLabel("작업"))
+        task_label = QLabel("작업")
+        task_label.setBuddy(self.task)
+        row.addWidget(task_label)
         row.addWidget(self.task, 1)
-        row.addWidget(QLabel("상세"))
+        detail_label = QLabel("상세")
+        detail_label.setBuddy(self.detail)
+        row.addWidget(detail_label)
         row.addWidget(self.detail, 1)
         layout.addLayout(row)
-        layout.addWidget(self.input)
         row = QHBoxLayout()
+        input_label = QLabel("요청 · 추가 조건")
+        input_label.setObjectName("sectionTitle")
+        input_label.setBuddy(self.input)
+        row.addWidget(input_label)
+        row.addStretch()
         row.addWidget(self.template)
         row.addWidget(self.library)
         row.addWidget(self.reset)
+        layout.addLayout(row)
+        layout.addWidget(self.input)
+        layout.addWidget(self.inline_notice)
+        row = QHBoxLayout()
         row.addStretch()
         row.addWidget(self.send)
         layout.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(QLabel("정리 결과"))
+        result_label = QLabel("정리 결과")
+        result_label.setToolTip("정리 결과를 직접 수정할 수 있습니다.")
+        result_label.setObjectName("sectionTitle")
+        result_label.setBuddy(self.result)
+        row.addWidget(result_label)
         row.addWidget(self.result_choice, 1)
         row.addWidget(self.copy)
         layout.addLayout(row)
-        layout.addWidget(self.result, 2)
+        layout.addWidget(self.result, 3)
         layout.addWidget(self.status)
+
+    def _toggle_history(self, visible):
+        self.conversation.setVisible(visible)
+        self.conversation_label.setText("션과 대화" if visible else "션과 프롬프트 정리")
+        self.history_toggle.setText("대화 기록 접기" if visible else "대화 기록 보기")
+
+    def _show_notice(self, text):
+        # Keep the short actionable failure by the input; full details remain
+        # in the status area. The parent scrolls this into view without moving
+        # keyboard focus or changing the draft.
+        self.inline_notice.setText(text)
+        self.inline_notice.show()
+        self.notice_raised.emit()
 
     def _provider_changed(self):
         if self.provider.currentData() == "offline":
@@ -194,6 +295,7 @@ class PromptConversation(QWidget):
         # explicit confirmation of the changed state.
         if self._busy:
             self.status.setText("정리 중에는 보관함을 불러올 수 없어요. 기존 입력은 그대로 남아 있습니다.")
+            self._show_notice("정리 중에는 보관함을 불러올 수 없어요. 입력은 그대로 남아 있습니다.")
             return
         current = self._draft_snapshot()
         if current != getattr(self, "_library_snapshot", current):
@@ -205,6 +307,7 @@ class PromptConversation(QWidget):
     def _apply_library_if_unchanged(self, item, expected):
         if self._busy or self._draft_snapshot() != expected:
             self.status.setText("입력이 다시 바뀌어 불러오지 않았어요. 기존 내용은 그대로 남아 있습니다.")
+            self._show_notice("입력이 바뀌어 불러오지 않았어요. 기존 내용은 그대로 남아 있습니다.")
             return
         self._apply_library(item)
 
@@ -256,6 +359,7 @@ class PromptConversation(QWidget):
     def _clear_if_unchanged(self, expected):
         if self._busy or self._draft_snapshot() != expected:
             self.status.setText("확인 중 입력이 바뀌어 새 요청을 시작하지 않았어요. 기존 내용은 그대로 남아 있습니다.")
+            self._show_notice("입력이 바뀌어 새 요청을 시작하지 않았어요. 기존 내용은 그대로 남아 있습니다.")
             return
         self._clear_request()
 
@@ -268,6 +372,7 @@ class PromptConversation(QWidget):
         self.result_choice.clear()
         self.result.clear()
         self.input.clear()
+        self.inline_notice.hide()
         self.conversation.setPlainText("션: 어떤 요청을 정리할까요?")
         self.status.setText("새 요청을 입력해 주세요.")
 
@@ -328,6 +433,7 @@ class PromptConversation(QWidget):
         text = self.input.toPlainText()
         if not text.strip():
             self.status.setText("먼저 요청 또는 추가 조건을 입력해 주세요.")
+            self._show_notice("먼저 요청 또는 추가 조건을 입력해 주세요.")
             return
         provider = self.provider.currentData()
         task, detail = self.task.currentData(), self.detail.currentData()
@@ -358,6 +464,7 @@ class PromptConversation(QWidget):
     def _submit_if_unchanged(self, expected, *args):
         if self._request_snapshot() != expected:
             self.status.setText("확인 중 입력이나 설정이 바뀌어 전송하지 않았어요. 내용을 다시 확인해 주세요.")
+            self._show_notice("입력이나 설정이 바뀌어 전송하지 않았어요. 다시 확인해 주세요.")
             return
         self._submit_confirmed(*args)
 
@@ -365,12 +472,15 @@ class PromptConversation(QWidget):
         # The pet may have been put to sleep while the confirmation was open.
         if self._sleep_paused:
             self.status.setText("션이 완전히 자고 있어요. 깨운 후 다시 보내 주세요. 입력은 그대로 남아 있습니다.")
+            self._show_notice("션을 깨운 후 다시 보내 주세요. 입력은 그대로 남아 있습니다.")
             return
         # A second confirmation can return after another request has started.
         if self._busy:
             self.status.setText("이미 정리 중이에요. 입력은 그대로 남아 있습니다.")
+            self._show_notice("이미 정리 중이에요. 입력은 그대로 남아 있습니다.")
             return
         self._pending = (text, original, revision, provider)
+        self.inline_notice.hide()
         self._set_busy(True)
         self.status.setText("션이 정리하고 있어요…" if provider != "offline" else "기본 정리 중…")
 
@@ -448,3 +558,5 @@ class PromptConversation(QWidget):
                        "다른 AI 서비스나 기본 정리를 직접 선택할 수도 있어요. "
                        "AI로 보낼 때마다 전송 여부를 확인하며, 기본 정리는 AI 재작성이 아닙니다.")
         self.status.setText(status)
+        short_message = message if len(message) <= 180 else message[:177] + "…"
+        self._show_notice("정리하지 못했어요: " + short_message)

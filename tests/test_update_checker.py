@@ -16,7 +16,7 @@ from PySide6.QtCore import QCoreApplication
 import update_checker as checker
 
 
-def release(tag="v0.1.1", url=None, **overrides):
+def release(tag="v99.0.0", url=None, **overrides):
     data = {"tag_name": tag, "draft": False, "prerelease": False,
             "html_url": url if url is not None else checker.RELEASE_BASE + tag}
     data.update(overrides)
@@ -35,13 +35,13 @@ class UpdateTests(unittest.TestCase):
                 checker.parse_version(text)
 
     def test_new_current_and_older(self):
-        self.assertEqual(checker._parse_release(release("v0.1.1"))["status"], "available")
-        self.assertEqual(checker._parse_release(release("v0.1.0"))["status"], "current")
-        self.assertEqual(checker._parse_release(release("v0.0.9"))["status"], "current")
+        self.assertEqual(checker._parse_release(release("v99.0.0"))["status"], "available")
+        self.assertEqual(checker._parse_release(release("v" + checker.APP_VERSION))["status"], "current")
+        self.assertEqual(checker._parse_release(release("v0.0.0"))["status"], "current")
 
     def test_nonofficial_url_or_prerelease_is_rejected(self):
         bad = [release(url="https://evil.example/update"),
-               release(url=checker.RELEASE_BASE + "v0.1.1?token=x"),
+               release(url=checker.RELEASE_BASE + "v99.0.0?token=x"),
                release(draft=True), release(prerelease=True),
                release(url="https://github.com/Other/SyeonPet/releases/tag/v0.1.1")]
         for value in bad:

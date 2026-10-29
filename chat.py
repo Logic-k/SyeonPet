@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+                               QScrollArea, QSlider, QVBoxLayout, QWidget)
 
 from optimizer_chat import PromptConversation
 
@@ -19,6 +19,14 @@ class ChatPanel(QWidget):
         super().__init__()
         self.pet = pet
         self.behavior = behavior
+        self.setObjectName("promptWindow")
+        self.setStyleSheet("""
+            QWidget#promptWindow { background: #f3f6fa; }
+            QLabel#windowControlLabel { color: #344e60; }
+            QPushButton#wakePet { background: #ffffff; color: #172b3a;
+                border: 1px solid #8fa5b4; border-radius: 4px; padding: 4px 7px; }
+            QPushButton#wakePet:focus { border: 2px solid #195b83; padding: 3px 6px; }
+        """)
         # Kept separate from the existing pet config and prompt library.
         self._settings = settings if settings is not None else QSettings("SyeonPet", "Conversation")
 
@@ -34,6 +42,7 @@ class ChatPanel(QWidget):
         opacity_row = QHBoxLayout()
         opacity_row.addStretch()
         opacity_label = QLabel("창 불투명도")
+        opacity_label.setObjectName("windowControlLabel")
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setAccessibleName("대화창 불투명도")
         self.opacity_slider.setToolTip("대화창의 불투명도를 조절합니다.")
@@ -41,6 +50,7 @@ class ChatPanel(QWidget):
         self.opacity_slider.setMaximumWidth(120)
         self.opacity_slider.setSingleStep(5)
         self.opacity_value = QLabel()
+        self.opacity_value.setObjectName("windowControlLabel")
         self.opacity_value.setMinimumWidth(38)
         opacity_label.setBuddy(self.opacity_slider)
         opacity_row.addWidget(opacity_label)
@@ -50,15 +60,33 @@ class ChatPanel(QWidget):
 
         sleep_row = QHBoxLayout()
         self.sleep_notice = QLabel("션이 완전히 자고 있어요. 깨우면 대화를 이어갈 수 있어요.")
+        self.sleep_notice.setObjectName("windowControlLabel")
         self.sleep_notice.setWordWrap(True)
         self.wake_button = QPushButton("션 깨우기")
+        self.wake_button.setObjectName("wakePet")
         self.wake_button.clicked.connect(self.behavior.wake)
         sleep_row.addWidget(self.sleep_notice, 1)
         sleep_row.addWidget(self.wake_button)
         layout.addLayout(sleep_row)
 
         self.prompt_conversation = PromptConversation(self)
-        layout.addWidget(self.prompt_conversation)
+        self.conversation_scroll = QScrollArea(self)
+        self.conversation_scroll.setObjectName("conversationScroll")
+        self.conversation_scroll.setAccessibleName("프롬프트 대화 영역")
+        self.conversation_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.conversation_scroll.setWidgetResizable(True)
+        self.conversation_scroll.setStyleSheet("""
+            QScrollArea#conversationScroll { background: #f3f6fa; border: none; }
+            QScrollBar:vertical { background: #e3ebf0; width: 12px; margin: 0; }
+            QScrollBar::handle:vertical { background: #6b8494; min-height: 24px; border-radius: 5px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: #e3ebf0; }
+        """)
+        self.conversation_scroll.setWidget(self.prompt_conversation)
+        self.prompt_conversation.notice_raised.connect(
+            lambda: self.conversation_scroll.ensureWidgetVisible(
+                self.prompt_conversation.inline_notice, 0, 12))
+        layout.addWidget(self.conversation_scroll, 1)
         self.behavior.fully_asleep_changed.connect(self._sleep_changed)
         self._sleep_changed(self.behavior.fully_asleep)
 

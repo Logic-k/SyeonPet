@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import QApplication
 
 from optimizer_chat import PromptConversation
@@ -45,6 +46,21 @@ class PromptConversationTests(unittest.TestCase):
         self.panel.input.setPlainText(text)
         self.panel.submit()
         self._wait_idle()
+
+    def test_compact_history_toggle_preserves_the_conversation_and_draft(self):
+        self._submit_offline("회의 메모를 정리해 주세요")
+        self.panel.input.setPlainText("추가할 조건")
+        history = self.panel.conversation.toPlainText()
+        self.assertFalse(self.panel.conversation.isVisible())
+        self.panel.history_toggle.setFocus()
+        QApplication.sendEvent(self.panel.history_toggle, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier))
+        QApplication.sendEvent(self.panel.history_toggle, QKeyEvent(QEvent.Type.KeyRelease, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier))
+        self.assertTrue(self.panel.conversation.isVisible())
+        self.assertEqual(self.panel.conversation.toPlainText(), history)
+        self.assertEqual(self.panel.input.toPlainText(), "추가할 조건")
+        self.panel.history_toggle.click()
+        self.assertFalse(self.panel.conversation.isVisible())
+        self.assertEqual(self.panel.conversation.toPlainText(), history)
 
     def test_busy_signal_emits_only_transitions_and_finishes_on_failure(self):
         transitions = []

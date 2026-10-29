@@ -57,6 +57,38 @@ class ChatWindowTests(unittest.TestCase):
         self.assertEqual(prompt.input.toPlainText(), "요청 초안 <b>그대로</b>")
         self.assertEqual(prompt.result.toPlainText(), "수정한 결과")
 
+    def test_small_window_error_notice_is_visible_without_losing_focus_or_draft(self):
+        self.panel.resize(360, 450)
+        self.panel.show()
+        prompt = self.panel.prompt_conversation
+        prompt.history_toggle.click()
+        self.app.processEvents()
+        prompt.input.setFocus()
+        prompt.submit()
+        self.app.processEvents()
+        notice = prompt.inline_notice
+        viewport = self.panel.conversation_scroll.viewport()
+        notice_top = notice.mapTo(viewport, notice.rect().topLeft()).y()
+        notice_bottom = notice.mapTo(viewport, notice.rect().bottomLeft()).y()
+        self.assertTrue(notice.isVisible())
+        self.assertGreaterEqual(notice_top, 0)
+        self.assertLess(notice_bottom, viewport.height())
+        self.assertTrue(prompt.input.hasFocus())
+        self.assertIn("입력", notice.text())
+        prompt.input.setPlainText("유지할 원문")
+        prompt.result.setPlainText("유지할 결과")
+        prompt._pending = ("유지할 원문", "유지할 원문", "", "vireonix")
+        prompt._fail("인터넷 연결을 확인해 주세요.")
+        self.app.processEvents()
+        notice_top = notice.mapTo(viewport, notice.rect().topLeft()).y()
+        notice_bottom = notice.mapTo(viewport, notice.rect().bottomLeft()).y()
+        self.assertGreaterEqual(notice_top, 0)
+        self.assertLess(notice_bottom, viewport.height())
+        self.assertIn("인터넷 연결", notice.text())
+        self.assertEqual(prompt.input.toPlainText(), "유지할 원문")
+        self.assertEqual(prompt.result.toPlainText(), "유지할 결과")
+        self.assertTrue(prompt.input.hasFocus())
+
     def test_opacity_is_bounded_and_persisted_separately(self):
         self.panel.opacity_slider.setValue(70)
         self.assertEqual(self.panel.opacity_value.text(), "70%")

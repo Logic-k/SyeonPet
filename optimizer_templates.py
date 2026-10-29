@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QComboBox, QDialog, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
-                               QPlainTextEdit, QPushButton, QVBoxLayout)
+                               QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 
 def _catalog_path(filename: str) -> Path:
@@ -59,6 +60,16 @@ def filter_templates(templates: list[dict[str, str]], query: str = "",
             ).casefold())]
 
 
+class _TemplateContent(QWidget):
+    def sizeHint(self):
+        # Text editors have a large default size hint. Let the scroll area
+        # distribute the available space instead of scrolling at normal size.
+        return self.minimumSizeHint()
+
+    def heightForWidth(self, width):
+        return self.layout().minimumHeightForWidth(width)
+
+
 class TemplatePicker(QDialog):
     def __init__(self, parent=None, on_selected: Callable[[str], None] | None = None):
         super().__init__(parent)
@@ -67,18 +78,74 @@ class TemplatePicker(QDialog):
         self._current_id: str | None = None
         self._loading = False
         self.setWindowTitle("프롬프트 템플릿")
+        self.setObjectName("templatePicker")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.resize(540, 560)
+        self.setStyleSheet("""
+            QDialog#templatePicker { background: #f3f6fa; color: #172b3a; }
+            QScrollArea#templateScroll, QWidget#templateContent { background: #f3f6fa; border: none; }
+            QDialog#templatePicker QLabel { color: #172b3a; }
+            QLabel#templateTitle { font-size: 12pt; font-weight: 600; }
+            QLabel#templateSection { font-weight: 600; }
+            QLabel#templatePrivacy { color: #513f20; }
+            QLineEdit, QComboBox, QListWidget, QPlainTextEdit {
+                background: #ffffff; color: #172b3a;
+                border: 1px solid #9aaebc; border-radius: 4px; padding: 5px;
+                selection-background-color: #195b83; selection-color: #ffffff;
+            }
+            QLineEdit:focus, QComboBox:focus, QListWidget:focus, QPlainTextEdit:focus {
+                border: 2px solid #195b83;
+            }
+            QListWidget::item { padding: 4px; }
+            QListWidget::item:selected { background: #195b83; color: #ffffff; }
+            QScrollBar:vertical { background: #dce5eb; width: 10px; margin: 0; }
+            QScrollBar::handle:vertical { background: #667e8d; min-height: 24px;
+                border-radius: 5px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar:horizontal { background: #dce5eb; height: 10px; margin: 0; }
+            QScrollBar::handle:horizontal { background: #667e8d; min-width: 24px;
+                border-radius: 5px; }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+            QPushButton { background: #ffffff; color: #172b3a;
+                border: 1px solid #9aaebc; border-radius: 4px;
+                padding: 6px 10px; }
+            QPushButton:hover { background: #e4edf3; }
+            QPushButton:focus { border: 2px solid #195b83; }
+            QPushButton:checked { background: #d9eaf4; border-color: #195b83; }
+            QPushButton#templateSelect { background: #195b83; color: #ffffff;
+                border-color: #195b83; font-weight: 600; }
+            QPushButton#templateSelect:hover { background: #124969; }
+            QPushButton#templateSelect:disabled { background: #e1e7eb;
+                color: #536773; border-color: #aab9c2; }
+        """)
 
-        layout = QVBoxLayout(self)
-        intro = QLabel("업무에 맞는 예시를 골라 [빈칸]을 채우고 원문을 확인하세요. 기관 공식 서식이 아닌 작성 도우미입니다.")
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(12, 12, 12, 12)
+        outer_layout.setSpacing(6)
+        scroll = QScrollArea()
+        scroll.setObjectName("templateScroll")
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        content = _TemplateContent()
+        content.setObjectName("templateContent")
+        content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        outer_layout.addWidget(scroll, 1)
+        title = QLabel("템플릿 선택")
+        title.setObjectName("templateTitle")
+        layout.addWidget(title)
+        intro = QLabel("예시를 선택하고 [빈칸]을 채워 주세요. 기관 공식 서식은 아닙니다.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
         self.office_button = QPushButton("교육지원청 업무 예시 보기")
         self.office_button.setCheckable(True)
         self.office_button.setAccessibleName("교육지원청 업무 예시만 보기")
         layout.addWidget(self.office_button)
-        privacy = QLabel("외부 AI에는 실제 학생·학부모 개인정보와 비공개 자료를 입력하지 말고, 기관 정책과 결과를 직접 확인하세요.")
+        privacy = QLabel("외부 AI에 개인정보·비공개 자료를 입력하지 말고 기관 정책과 결과를 확인하세요.")
+        privacy.setObjectName("templatePrivacy")
         privacy.setWordWrap(True)
         layout.addWidget(privacy)
         self.catalog_warning = QLabel()
@@ -92,29 +159,44 @@ class TemplatePicker(QDialog):
         self.category = QComboBox()
         self.category.setAccessibleName("템플릿 분야")
         self.category.addItem("전체 분야", "")
+        search_label = QLabel("검색")
+        search_label.setBuddy(self.search)
+        filters.addWidget(search_label)
         filters.addWidget(self.search, 1)
         filters.addWidget(self.category)
         layout.addLayout(filters)
 
+        list_label = QLabel("예시 목록")
+        list_label.setObjectName("templateSection")
         self.list = QListWidget()
         self.list.setAccessibleName("템플릿 목록")
-        layout.addWidget(self.list, 1)
+        self.list.setMinimumHeight(75)
+        list_label.setBuddy(self.list)
+        layout.addWidget(list_label)
+        layout.addWidget(self.list, 3)
         self.description = QLabel("템플릿을 선택해 주세요.")
         self.description.setWordWrap(True)
         layout.addWidget(self.description)
+        preview_label = QLabel("내용 확인 및 수정")
+        preview_label.setObjectName("templateSection")
         self.preview = QPlainTextEdit()
         self.preview.setAccessibleName("템플릿 내용 편집")
         self.preview.setPlaceholderText("선택한 템플릿의 내용을 여기서 수정할 수 있습니다.")
-        layout.addWidget(self.preview, 2)
+        self.preview.setMinimumHeight(110)
+        preview_label.setBuddy(self.preview)
+        layout.addWidget(preview_label)
+        layout.addWidget(self.preview, 4)
 
         buttons = QHBoxLayout()
         buttons.addStretch()
         self.cancel_button = QPushButton("취소")
         self.select_button = QPushButton("입력란에 넣기")
+        self.select_button.setObjectName("templateSelect")
         self.select_button.setEnabled(False)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.select_button)
-        layout.addLayout(buttons)
+        outer_layout.addLayout(buttons)
+        scroll.setWidget(content)
 
         try:
             self._templates = load_templates()
@@ -137,6 +219,7 @@ class TemplatePicker(QDialog):
         self.cancel_button.clicked.connect(self.reject)
         self.select_button.clicked.connect(self._choose)
         self._refresh()
+        self.search.setFocus()
 
     def _set_office_mode(self, _enabled):
         # Avoid retaining an incompatible category from the previous view.
