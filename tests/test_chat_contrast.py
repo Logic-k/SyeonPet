@@ -4,10 +4,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QRect, QSettings
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -57,6 +59,36 @@ class ChatWindowTests(unittest.TestCase):
         self.panel.show_near_pet()
         self.assertEqual(prompt.input.toPlainText(), "요청 초안 <b>그대로</b>")
         self.assertEqual(prompt.result.toPlainText(), "수정한 결과")
+
+    def test_window_fits_small_negative_screen_and_restores_minimum_on_larger_screen(self):
+        prompt = self.panel.prompt_conversation
+        prompt.input.setPlainText("보존할 입력")
+        prompt.result.setPlainText("보존할 결과")
+        small = QRect(-550, 30, 400, 400)
+        large = QRect(0, 0, 1400, 900)
+        selected = {"bounds": small, "pet": QRect(-510, 70, 65, 65)}
+        screen = SimpleNamespace(availableGeometry=lambda: selected["bounds"])
+        with patch.object(self.panel, "_screen_for_pet", return_value=screen), \
+             patch.object(self.pet, "sprite_rect_global", side_effect=lambda: selected["pet"]):
+            self.panel.show_near_pet()
+            self.app.processEvents()
+            self.app.processEvents()
+            frame = self.panel.frameGeometry()
+            self.assertTrue(small.contains(frame), f"frame={frame}, bounds={small}")
+            self.assertLessEqual(self.panel.minimumHeight(), small.height())
+            self.assertGreater(self.panel.conversation_scroll.verticalScrollBar().maximum(), 0)
+            self.assertEqual(prompt.input.toPlainText(), "보존할 입력")
+            self.assertEqual(prompt.result.toPlainText(), "보존할 결과")
+
+            self.panel.close()
+            selected.update(bounds=large, pet=QRect(200, 200, 65, 65))
+            self.panel.show_near_pet()
+            self.app.processEvents()
+            self.app.processEvents()
+            self.assertTrue(large.contains(self.panel.frameGeometry()))
+            self.assertEqual(self.panel.minimumWidth(), 360)
+            self.assertEqual(self.panel.minimumHeight(), 450)
+            self.assertEqual(prompt.input.toPlainText(), "보존할 입력")
 
     def test_small_window_error_notice_is_visible_without_losing_focus_or_draft(self):
         self.panel.resize(360, 450)

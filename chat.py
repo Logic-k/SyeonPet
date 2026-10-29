@@ -170,18 +170,42 @@ class ChatPanel(QWidget):
         dialog.finished.connect(finished)
         dialog.open()
 
+    @staticmethod
+    def _screen_for_pet(geo):
+        return QGuiApplication.screenAt(geo.center()) or QGuiApplication.primaryScreen()
+
+    def _fit_near_pet(self, geo, bounds):
+        """Keep the whole native window inside the pet's monitor work area."""
+        if bounds.isEmpty():
+            return
+        frame = self.frameGeometry()
+        extra_width = max(0, frame.width() - self.width())
+        extra_height = max(0, frame.height() - self.height())
+        margin = 4
+        available_width = max(1, bounds.width() - extra_width - 2 * margin)
+        available_height = max(1, bounds.height() - extra_height - 2 * margin)
+        # A fixed minimum can make the window larger than a small work area.
+        # The inner scroll area keeps the controls reachable when it shrinks.
+        self.setMinimumSize(min(360, available_width), min(450, available_height))
+        self.resize(min(self.width(), available_width), min(self.height(), available_height))
+        frame = self.frameGeometry()
+        x = geo.right() + 8
+        if x + frame.width() > bounds.right() + 1 - margin:
+            x = geo.left() - 8 - frame.width()
+        x = max(bounds.left() + margin, min(x, bounds.right() + 1 - frame.width() - margin))
+        y = max(bounds.top() + margin, min(geo.top() - 20, bounds.bottom() + 1 - frame.height() - margin))
+        self.move(x, y)
+
     def show_near_pet(self):
         geo = self.pet.sprite_rect_global()
-        screen = QGuiApplication.screenAt(geo.center()) or QGuiApplication.primaryScreen()
-        bounds = screen.availableGeometry()
-        self.resize(min(self.width(), bounds.width()), min(self.height(), bounds.height()))
-        x = geo.right() + 8
-        if x + self.width() > bounds.right():
-            x = geo.left() - 8 - self.width()
-        x = max(bounds.left() + 4, min(x, bounds.right() - self.width() - 4))
-        y = max(bounds.top() + 4, min(geo.top() - 20, bounds.bottom() - self.height() - 4))
-        self.move(x, y)
+        screen = self._screen_for_pet(geo)
+        bounds = screen.availableGeometry() if screen is not None else None
+        if bounds is not None:
+            self._fit_near_pet(geo, bounds)
         self.show()
+        if bounds is not None:
+            # Native title-bar dimensions can change after the window is shown.
+            QTimer.singleShot(0, self, lambda: self._fit_near_pet(geo, bounds))
         self.raise_()
         (self.wake_button if self.behavior.fully_asleep else self.prompt_conversation.input).setFocus()
 
