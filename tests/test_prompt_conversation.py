@@ -105,6 +105,65 @@ class PromptConversationTests(unittest.TestCase):
         self.panel.result_choice.setCurrentIndex(1)
         self.assertEqual(self.panel.result.toPlainText(), second)
 
+    def test_first_result_keeps_an_unslotted_user_draft_as_selectable_history(self):
+        draft = "결과를 만들기 전에 직접 쓴 초안\n두 번째 줄"
+        self.panel.result.setPlainText(draft)
+        completed = []
+        self.panel.result_ready.connect(lambda: completed.append(True))
+        self._submit_offline("회의 내용을 요약해 주세요")
+        self.assertEqual(completed, [True])
+        generated = self.panel.result.toPlainText()
+        self.assertIn("회의 내용을 요약해 주세요", generated)
+        self.assertEqual(self.panel.result_choice.count(), 2)
+        self.assertEqual(self.panel.result_choice.itemText(0), "직접 작성한 결과")
+        self.assertIn("미리 작성한 결과", self.panel.status.text())
+        self.panel.result_choice.setCurrentIndex(0)
+        self.assertEqual(self.panel.result.toPlainText(), draft)
+        self.panel.result_choice.setCurrentIndex(1)
+        self.assertEqual(self.panel.result.toPlainText(), generated)
+
+    def test_first_ai_request_never_transmits_unslotted_draft_and_keeps_it(self):
+        draft = "외부에 보내지 않을 결과 초안"
+        self.panel.result.setPlainText(draft)
+        self.panel.input.setPlainText("합성 원문")
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("vireonix"))
+        with patch.object(self.panel, "_confirm", side_effect=lambda _title, _body, callback: callback()), \
+                patch("optimizer_chat.optimize_ai", return_value={"result": "새 결과", "notes": []}) as ai:
+            self.panel.submit()
+            self._wait_idle()
+            self.assertEqual(ai.call_args.kwargs["previous_result"], "")
+        self.assertEqual(self.panel.result.toPlainText(), "새 결과")
+        self.panel.result_choice.setCurrentIndex(0)
+        self.assertEqual(self.panel.result.toPlainText(), draft)
+
+    def test_first_failure_and_changes_during_processing_preserve_result_draft(self):
+        self.panel.result.setPlainText("수정 전")
+        self.panel.input.setPlainText("합성 원문")
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("vireonix"))
+        with patch.object(self.panel, "_confirm", side_effect=lambda _title, _body, callback: callback()), \
+                patch("optimizer_chat.optimize_ai", side_effect=RuntimeError("연결 실패")):
+            self.panel.submit()
+            self._wait_idle()
+        self.assertEqual(self.panel.result.toPlainText(), "수정 전")
+        self.assertEqual(self.panel.result_choice.count(), 0)
+
+        started, release = threading.Event(), threading.Event()
+        def delayed(*_args, **_kwargs):
+            started.set()
+            if not release.wait(3):
+                raise TimeoutError("test worker not released")
+            return {"result": "새 결과", "notes": []}
+        with patch.object(self.panel, "_confirm", side_effect=lambda _title, _body, callback: callback()), \
+                patch("optimizer_chat.optimize_ai", side_effect=delayed):
+            self.panel.submit()
+            self.assertTrue(started.wait(2))
+            self.panel.result.setPlainText("처리 중 바뀐 초안")
+            release.set()
+            self._wait_idle()
+        self.assertEqual(self.panel.result.toPlainText(), "새 결과")
+        self.panel.result_choice.setCurrentIndex(0)
+        self.assertEqual(self.panel.result.toPlainText(), "처리 중 바뀐 초안")
+
     def test_cancelling_external_confirmation_keeps_input_and_never_calls_provider(self):
         self.panel.provider.setCurrentIndex(self.panel.provider.findData("vireonix"))
         self.panel.input.setPlainText("전송 전 유지할 원문")

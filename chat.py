@@ -1,7 +1,7 @@
 """Prompt conversation window positioned beside the desktop pet."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QPoint, QSettings, QTimer, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
                                QScrollArea, QSlider, QVBoxLayout, QWidget)
@@ -86,6 +86,8 @@ class ChatPanel(QWidget):
         self.prompt_conversation.notice_raised.connect(
             lambda: self.conversation_scroll.ensureWidgetVisible(
                 self.prompt_conversation.inline_notice, 0, 12))
+        self.prompt_conversation.result_ready.connect(
+            lambda: QTimer.singleShot(0, self._show_result))
         layout.addWidget(self.conversation_scroll, 1)
         self.behavior.fully_asleep_changed.connect(self._sleep_changed)
         self._sleep_changed(self.behavior.fully_asleep)
@@ -107,6 +109,21 @@ class ChatPanel(QWidget):
 
     def _set_opacity(self, value: int):
         self._apply_opacity(value, persist=True)
+
+    def _show_result(self):
+        """Show the result heading and keep keyboard focus on a visible field."""
+        result = self.prompt_conversation.result
+        viewport = self.conversation_scroll.viewport()
+        y = result.mapTo(viewport, QPoint(0, 0)).y()
+        if y < 0 or y + result.height() > viewport.height():
+            header_y = self.prompt_conversation.result_choice.mapTo(
+                self.prompt_conversation, QPoint(0, 0)).y()
+            self.conversation_scroll.verticalScrollBar().setValue(max(0, header_y - 8))
+            input_widget = self.prompt_conversation.input
+            input_y = input_widget.mapTo(viewport, QPoint(0, 0)).y()
+            if input_widget.hasFocus() and (input_y < 0 or input_y + input_widget.height() > viewport.height()):
+                result.setFocus()
+                self.conversation_scroll.verticalScrollBar().setValue(max(0, header_y - 8))
 
     def _sleep_changed(self, paused: bool):
         self.sleep_notice.setVisible(paused)

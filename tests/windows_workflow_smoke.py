@@ -80,6 +80,8 @@ def run():
             p = chat.prompt_conversation
             assert p.original == state["selected"]
             assert state["selected"] in p.result.toPlainText()
+            assert p.results[0] == result_draft
+            assert p.result_choice.itemText(0) == "직접 작성한 결과"
             assert state.get("thinking_started") == ("thinking", "thinking")
             assert len(chat.pet.sprites.states["thinking"]["frames"]) == 6
             assert state.get("thinking_capture"), "thinking capture failed"
@@ -185,7 +187,7 @@ def run():
                     state["thinking_capture"] = pet.grab().save(str(output / "thinking.png"))
             p.busy_changed.connect(record_busy)
             p.send.click()
-            wait_until(lambda: len(p.results) == 1 and not p._busy,
+            wait_until(lambda: len(p.results) == 2 and not p._busy,
                        lambda: wait_until(lambda: chat.behavior.mode != "thinking",
                                           complete, time.monotonic() + 3),
                        time.monotonic() + 5)

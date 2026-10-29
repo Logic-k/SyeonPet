@@ -3,14 +3,15 @@ import json
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QScrollArea
 
-from optimizer_templates import filter_templates, load_templates, show_template_picker
+from optimizer_templates import TemplatePicker, filter_templates, load_templates, show_template_picker
 
 
 class TemplateTests(unittest.TestCase):
@@ -70,6 +71,25 @@ class TemplateTests(unittest.TestCase):
         dialog.select_button.click()
         self.assertEqual(chosen, ["수정한 초안"])
 
+    def test_initial_picker_fits_available_screen_including_frame(self):
+        # Simulate a small monitor and a monitor left of the primary display.
+        # The actual OS window manager and monitor layout are tested separately.
+        for bounds in (QRect(0, 0, 400, 400), QRect(-550, 30, 400, 400)):
+            with self.subTest(bounds=bounds), patch.object(
+                    TemplatePicker, "_available_geometry", return_value=bounds):
+                chosen = []
+                dialog = show_template_picker(on_selected=chosen.append)
+                self.app.processEvents()
+                self.assertTrue(bounds.contains(dialog.frameGeometry()),
+                                f"{dialog.frameGeometry()} exceeds {bounds}")
+                self.assertLessEqual(
+                    dialog.select_button.mapTo(dialog, QPoint(0, dialog.select_button.height())).y(),
+                    dialog.height())
+                dialog.list.setCurrentRow(0)
+                dialog.preview.setPlainText("작은 화면에서 수정한 초안")
+                dialog.select_button.click()
+                self.assertEqual(chosen, ["작은 화면에서 수정한 초안"])
+
     def test_large_font_allows_horizontal_access_in_narrow_window(self):
         previous_font = self.app.font()
         try:
@@ -84,6 +104,29 @@ class TemplateTests(unittest.TestCase):
                 scroll.viewport(), QPoint(dialog.category.width(), 0)).x()
             self.assertLessEqual(category_right, scroll.viewport().width() + 4)
             dialog.cancel_button.click()
+        finally:
+            self.app.setFont(previous_font)
+
+    def test_initial_small_screen_with_large_font_keeps_buttons_reachable(self):
+        previous_font = self.app.font()
+        try:
+            self.app.setFont(QFont("Arial", 32))
+            bounds = QRect(0, 0, 400, 400)
+            with patch.object(TemplatePicker, "_available_geometry", return_value=bounds):
+                chosen = []
+                dialog = show_template_picker(on_selected=chosen.append)
+                self.app.processEvents()
+                self.assertTrue(bounds.contains(dialog.frameGeometry()),
+                                f"{dialog.frameGeometry()} exceeds {bounds}")
+                for button in (dialog.cancel_button, dialog.select_button):
+                    rect = button.geometry()
+                    self.assertTrue(dialog.rect().contains(rect), f"{rect} outside dialog")
+                self.assertLess(dialog.cancel_button.geometry().bottom(),
+                                dialog.select_button.geometry().top())
+                dialog.list.setCurrentRow(0)
+                dialog.preview.setPlainText("작은 화면에서 수정한 내용")
+                dialog.select_button.click()
+                self.assertEqual(chosen, ["작은 화면에서 수정한 내용"])
         finally:
             self.app.setFont(previous_font)
 

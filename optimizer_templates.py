@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import (QBoxLayout, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
                                QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
                                QVBoxLayout, QWidget)
@@ -195,6 +195,7 @@ class TemplatePicker(QDialog):
         self.select_button.setEnabled(False)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.select_button)
+        self._buttons_layout = buttons
         outer_layout.addLayout(buttons)
         scroll.setWidget(content)
 
@@ -220,6 +221,47 @@ class TemplatePicker(QDialog):
         self.select_button.clicked.connect(self._choose)
         self._refresh()
         self.search.setFocus()
+
+    def _available_geometry(self):
+        # A dialog belongs on the monitor containing its parent, which need not
+        # be the primary display (and may have negative desktop coordinates).
+        parent = self.parentWidget()
+        screen = parent.screen() if parent is not None else self.screen()
+        return screen.availableGeometry() if screen is not None else None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit_to_screen()
+        # Some window managers only report the final native frame after show.
+        QTimer.singleShot(0, self, self._fit_to_screen)
+
+    def _fit_to_screen(self):
+        bounds = self._available_geometry()
+        if bounds is None or bounds.isEmpty():
+            return
+        frame = self.frameGeometry()
+        # The non-client title bar and border also need to fit inside the work
+        # area; the editor scroll area handles the reduced client space.
+        extra_width = max(0, frame.width() - self.width())
+        extra_height = max(0, frame.height() - self.height())
+        # Leave a few pixels for native frame rounding and display scaling.
+        margin = 4
+        margins = self.layout().contentsMargins()
+        button_width = (self.cancel_button.sizeHint().width() +
+                        self.select_button.sizeHint().width() +
+                        self._buttons_layout.spacing() +
+                        margins.left() + margins.right())
+        available_width = bounds.width() - extra_width - 2 * margin
+        direction = (QBoxLayout.Direction.TopToBottom if button_width > available_width
+                     else QBoxLayout.Direction.LeftToRight)
+        self._buttons_layout.setDirection(direction)
+        self.layout().activate()
+        self.resize(min(self.width(), max(1, bounds.width() - extra_width - 2 * margin)),
+                    min(self.height(), max(1, bounds.height() - extra_height - 2 * margin)))
+        frame = self.frameGeometry()
+        x = max(bounds.left() + margin, min(frame.x(), bounds.right() - frame.width() + 1 - margin))
+        y = max(bounds.top() + margin, min(frame.y(), bounds.bottom() - frame.height() + 1 - margin))
+        self.move(x, y)
 
     def _set_office_mode(self, _enabled):
         # Avoid retaining an incompatible category from the previous view.

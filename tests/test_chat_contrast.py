@@ -1,6 +1,7 @@
 """Prompt-only window, readable opacity, and preservation on close/quit."""
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -88,6 +89,46 @@ class ChatWindowTests(unittest.TestCase):
         self.assertEqual(prompt.input.toPlainText(), "유지할 원문")
         self.assertEqual(prompt.result.toPlainText(), "유지할 결과")
         self.assertTrue(prompt.input.hasFocus())
+
+    def test_small_window_shows_result_on_completion_with_history_expanded(self):
+        self.panel.resize(360, 450)
+        self.panel.show()
+        prompt = self.panel.prompt_conversation
+        prompt.history_toggle.click()
+        prompt.input.setPlainText("회의 내용을 정리해 주세요")
+        completed = []
+        prompt.result_ready.connect(lambda: completed.append(True))
+        self.app.processEvents()
+        prompt.submit()
+        deadline = time.monotonic() + 5
+        while prompt.is_busy and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(.005)
+        # Completion scroll is queued after Qt finishes the focus/layout pass.
+        viewport = self.panel.conversation_scroll.viewport()
+        scroll_deadline = time.monotonic() + 1
+        while (prompt.result.mapTo(viewport, prompt.result.rect().topLeft()).y() + 60 >= viewport.height()
+               and time.monotonic() < scroll_deadline):
+            self.app.processEvents()
+            time.sleep(.005)
+        self.assertFalse(prompt.is_busy)
+        self.assertEqual(completed, [True])
+        self.assertIn("회의 내용을 정리해 주세요", prompt.result.toPlainText())
+        result_top = prompt.result.mapTo(viewport, prompt.result.rect().topLeft()).y()
+        result_bottom = prompt.result.mapTo(viewport, prompt.result.rect().bottomLeft()).y()
+        choice_top = prompt.result_choice.mapTo(viewport, prompt.result_choice.rect().topLeft()).y()
+        self.assertGreaterEqual(result_top, 0)
+        self.assertLess(result_top + 60, viewport.height(),
+                        f"top={result_top}, bottom={result_bottom}, viewport={viewport.height()}, "
+                        f"scroll={self.panel.conversation_scroll.verticalScrollBar().value()}/"
+                        f"{self.panel.conversation_scroll.verticalScrollBar().maximum()}")
+        self.assertGreaterEqual(choice_top, 0, "result heading and selector must be visible")
+        focused = QApplication.focusWidget()
+        self.assertIn(focused, (prompt.input, prompt.result))
+        focus_top = focused.mapTo(viewport, focused.rect().topLeft()).y()
+        focus_bottom = focused.mapTo(viewport, focused.rect().bottomLeft()).y()
+        self.assertGreaterEqual(focus_top, 0)
+        self.assertLess(focus_bottom, viewport.height())
 
     def test_opacity_is_bounded_and_persisted_separately(self):
         self.panel.opacity_slider.setValue(70)

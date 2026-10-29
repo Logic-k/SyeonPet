@@ -50,6 +50,7 @@ class PromptConversation(QWidget):
 
     busy_changed = Signal(bool)
     notice_raised = Signal()
+    result_ready = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -519,6 +520,14 @@ class PromptConversation(QWidget):
     def _finish(self, reply):
         text, original, revision, provider = self._pending
         self._save_result()
+        # The result editor is usable before the first generation. Keep an
+        # unslotted draft as a selectable entry instead of overwriting it.
+        # It is deliberately not included in a first external AI request.
+        unslotted_draft = self._shown_result < 0 and self.result.toPlainText() != ""
+        if unslotted_draft:
+            self.results.append(self.result.toPlainText())
+            self._result_revision_counts.append(0)
+            self.result_choice.addItem("직접 작성한 결과")
         self.original = original
         if revision:
             self.revisions.append(revision)
@@ -544,9 +553,12 @@ class PromptConversation(QWidget):
             notes.extend(review_result(self.original, "\n\n".join(self.revisions), reply["result"]))
         if input_changed:
             notes.append("정리 중 바뀐 입력은 그대로 남겨 두었어요. 다음 요청에 사용할 내용을 확인해 주세요.")
+        if unslotted_draft:
+            notes.append("미리 작성한 결과는 ‘직접 작성한 결과’에서 확인할 수 있어요.")
         self.status.setText("\n".join(notes) if notes else "원래 의도와 조건을 확인해 주세요.")
         self._set_busy(False)
         self.input.setFocus()
+        self.result_ready.emit()
 
     def _fail(self, message):
         self._set_busy(False)
