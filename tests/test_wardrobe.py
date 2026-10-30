@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from pet import ASSETS, PetWidget, SpriteBank
 from wardrobe import WardrobeWindow, decorate_frame
+from wardrobe_presets import PRESETS
 from wardrobe_packs import import_sprite_pack
 
 
@@ -72,6 +73,25 @@ class WardrobeTests(unittest.TestCase):
         another.tick.stop()
         self.assertEqual(another.wardrobe_choice, "original")
         another.close()
+
+    def test_premade_outfits_apply_and_survive_restart(self):
+        window = WardrobeWindow(self.pet)
+        self.assertGreaterEqual(len(PRESETS), 6)
+        original = pixels(self.bank.states["idle"]["frames"][0])
+        for choice in PRESETS:
+            with self.subTest(choice=choice):
+                window.buttons[choice].click()
+                self.assertEqual(self.pet.wardrobe_choice, choice)
+                self.assertEqual(self.settings.value("accessory"), choice)
+                self.assertNotEqual(pixels(self.pet._frame_pm(0)), original)
+        selected = self.pet.wardrobe_choice
+        another = PetWidget(self.bank, wardrobe_settings=self.settings)
+        another.tick.stop()
+        self.assertEqual(another.wardrobe_choice, selected)
+        another.close()
+        window.buttons["original"].click()
+        self.assertEqual(pixels(self.pet._frame_pm(0)), original)
+        window.close()
 
     def test_imported_pack_restores_and_invalid_pack_does_not_replace_current(self):
         root = Path(self.temp.name) / "packs"

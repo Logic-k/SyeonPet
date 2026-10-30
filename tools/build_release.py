@@ -24,6 +24,7 @@ APP_FILES = (
     "optimizer_library.py", "optimizer_templates.py", "pet.py",
     "version.py", "update_checker.py", "update_trust.py", "updater_core.py",
     "updater_switch.py", "updater_ui.py", "wardrobe.py", "wardrobe_packs.py",
+    "wardrobe_presets.py",
 )
 ROOT_RUNTIME = (
     "SyeonPet.exe", "pythonw.exe", "python3.dll", "python312.dll",
@@ -40,6 +41,11 @@ ASSETS = (
     "assets/sprite-sheet-alpha.png", "assets/prompt_templates.json",
     "assets/seobu_office_templates.json", "assets/thinking/manifest.json",
     "assets/thinking/sprite-sheet-alpha.png",
+    "assets/wardrobe_presets/anchors.json", "assets/wardrobe_presets/apron.png",
+    "assets/wardrobe_presets/beret.png",
+    "assets/wardrobe_presets/cardigan.png", "assets/wardrobe_presets/ribbon_hat.png",
+    "assets/wardrobe_presets/scarf_blue.png", "assets/wardrobe_presets/scarf_pink.png",
+    "assets/wardrobe_presets/sunhat.png",
 )
 # Only these public guides are bundled; other docs may contain private handoffs.
 GUIDES = (

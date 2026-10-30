@@ -12,12 +12,15 @@ from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout
                                QLabel, QPushButton, QRadioButton, QScrollArea,
                                QVBoxLayout, QWidget)
 
+from wardrobe_presets import PRESETS, decorate_preset
+
 
 CHOICES = {
     "original": ("기본 모습", "원래 션의 모습이에요."),
     "bow": ("하늘 리본", "산뜻한 하늘색 리본을 달아요."),
     "star": ("반짝 별", "작은 금빛 별 머리핀을 달아요."),
     "cap": ("학사모", "션과 함께 배우는 날의 작은 모자예요."),
+    **PRESETS,
 }
 _HAIR_CACHE = OrderedDict()
 
@@ -112,6 +115,8 @@ def decorate_frame(frame: QPixmap, choice: str) -> QPixmap:
     """Return a composited frame; source assets are never modified."""
     if choice == "original" or choice not in CHOICES or frame.isNull():
         return frame
+    if choice in PRESETS:
+        return decorate_preset(frame, choice)
     bounds = _hair_bounds(frame)
     if bounds is None:
         return frame
@@ -184,7 +189,10 @@ class WardrobeWindow(QWidget):
         title = QLabel("션이 옷장")
         title.setObjectName("title")
         layout.addWidget(title)
-        hint = QLabel("꾸미기를 선택하면 션에게 바로 적용돼요.\n원래 모습을 고르면 언제든 돌아갈 수 있어요.\n초록 머리가 없는 외형에서는 장식이 보이지 않을 수 있어요.")
+        hint = QLabel("마음에 드는 옷을 선택하면 션에게 바로 적용돼요.\n"
+                      "원래 모습을 고르면 언제든 돌아갈 수 있어요.\n"
+                      "몸통 옷은 자세에 따라 가려질 수 있어요.\n"
+                      "가져온 외형에 따라 옷이 보이지 않을 수 있어요.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
