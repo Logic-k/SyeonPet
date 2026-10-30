@@ -388,7 +388,7 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
     # the original wording re-attached when a literal check finds it lost.
     result, notes = keep_original_details(prompt, result, check_details=not revision)
     if re.search(r"\[[^\[\]\n]{1,40}\]", result):
-        notes.append("[대괄호] 칸은 알맞은 내용으로 채운 뒤 사용하세요.")
+        notes.append("[대괄호] 칸은 결과 아래 ‘빈칸 채우기’에서 알맞은 내용으로 채운 뒤 사용하세요.")
     return {"result": result, "notes": [
         *notes,
         "AI가 원문의 의미와 조건을 유지했는지 사용 전에 확인하세요.",

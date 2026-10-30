@@ -274,7 +274,7 @@ class PromptConversationTests(unittest.TestCase):
         self.assertIn("연결 실패", self.panel.status.text())
         self.assertEqual(self.panel.provider.currentData(), "vireonix")
         self.assertIn("션에게 보내기", self.panel.status.text())
-        self.assertIn("직접 선택", self.panel.status.text())
+        self.assertIn("Pollinations Classic으로 보내기", self.panel.status.text())
         self.assertIn("기본 정리는 AI 재작성이 아닙니다", self.panel.status.text())
 
     def test_switching_service_after_error_requires_new_consent(self):
@@ -296,6 +296,84 @@ class PromptConversationTests(unittest.TestCase):
         self.assertEqual(self.panel.input.toPlainText(), "추가 조건")
         self.assertEqual(self.panel.result.toPlainText(), "이전 결과")
         self.assertEqual(self.panel.provider.currentData(), "pollinations-classic")
+
+    def test_failed_ai_offers_other_service_and_still_asks_consent(self):
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("vireonix"))
+        self.assertFalse(self.panel.retry_other.isVisible())
+        self.panel.input.setPlainText("합성 원문")
+        with patch.object(self.panel, "_confirm", side_effect=lambda _title, _body, callback: callback()), \
+                patch("optimizer_chat.optimize_ai", side_effect=RuntimeError("HTTP 502")):
+            self.panel.submit()
+            self._wait_idle()
+        self.assertTrue(self.panel.retry_other.isVisible())
+        self.assertEqual(self.panel.retry_other.text(), "Pollinations Classic으로 보내기")
+        with patch.object(self.panel, "_confirm") as confirm, patch("optimizer_chat.optimize_ai") as ai:
+            self.panel.retry_other.click()
+            self.assertEqual(confirm.call_count, 1)
+            self.assertIn("Pollinations Classic", confirm.call_args.args[1])
+            ai.assert_not_called()
+        self.assertEqual(self.panel.provider.currentData(), "pollinations-classic")
+        self.assertFalse(self.panel.retry_other.isVisible())
+        self.assertEqual(self.panel.input.toPlainText(), "합성 원문")
+        with patch.object(self.panel, "_confirm", side_effect=lambda _title, _body, callback: callback()), \
+                patch("optimizer_chat.optimize_ai", return_value={"result": "결과", "notes": []}) as ai:
+            self.panel.submit()
+            self._wait_idle()
+            self.assertEqual(ai.call_args.kwargs["provider"], "pollinations-classic")
+        self.assertFalse(self.panel.retry_other.isVisible())
+        self.assertIn("예비", self.panel.provider.currentText())
+        self.assertIn("30초", self.panel.provider_note.text())
+
+    def test_offline_failure_and_sleep_do_not_offer_a_usable_other_service(self):
+        self.panel._pending = ("원문", "원문", "", "offline")
+        self.panel._fail("입력 오류")
+        self.assertFalse(self.panel.retry_other.isVisible())
+        self.panel._pending = ("원문", "원문", "", "pollinations-classic")
+        self.panel.set_sleep_paused(True)
+        self.panel._fail("서비스 오류")
+        self.assertEqual(self.panel.retry_other.text(), "Vireonix로 보내기")
+        self.assertFalse(self.panel.retry_other.isEnabled())
+        with patch.object(self.panel, "_confirm") as confirm:
+            self.panel._send_to_other_ai()
+            confirm.assert_not_called()
+        self.panel.set_sleep_paused(False)
+        self.assertTrue(self.panel.retry_other.isEnabled())
+
+    def test_fill_panel_fills_placeholders_in_one_undoable_step(self):
+        original = "[학교명] 학부모님께 [대상 학년] 안내문을 써 주세요. 서명: [학교명]\n자료:\n[자료 붙여 넣기]"
+        self.panel.result.setPlainText(original)
+        self.assertTrue(self.panel.fill_toggle.isVisible())
+        self.assertEqual(self.panel.fill_toggle.text(), "빈칸 채우기 (3)")
+        self.assertFalse(self.panel.fill_panel.isVisible())
+        self.panel.fill_toggle.click()
+        self.assertTrue(self.panel.fill_panel.isVisible())
+        self.assertEqual(list(self.panel._fill_fields), ["학교명", "대상 학년"])
+        self.assertIn("직접 붙여", self.panel.fill_hint.text())
+        self.panel._fill_fields["학교명"].setText("가상초등학교")
+        self.panel.fill_apply.click()
+        filled = self.panel.result.toPlainText()
+        self.assertEqual(filled.count("가상초등학교"), 2)
+        self.assertIn("[대상 학년]", filled)
+        self.assertEqual(list(self.panel._fill_fields), ["대상 학년"])
+        self.assertIn("빈칸 1개", self.panel.status.text())
+        self.panel.result.undo()
+        self.assertEqual(self.panel.result.toPlainText(), original)
+
+    def test_fill_panel_hides_without_placeholders_and_keeps_typed_values(self):
+        self.panel.result.setPlainText("빈칸이 없는 결과")
+        self.assertFalse(self.panel.fill_toggle.isVisible())
+        self.panel.result.setPlainText("[학교명] 안내")
+        self.panel.fill_toggle.click()
+        self.panel._fill_fields["학교명"].setText("가상초등학교")
+        self.panel.result.setPlainText("[학교명] 안내, 문의 [담당자 연락처]")
+        self.assertEqual(self.panel._fill_fields["학교명"].text(), "가상초등학교")
+        self.panel.fill_apply.click()
+        self.assertEqual(self.panel.result.toPlainText(), "가상초등학교 안내, 문의 [담당자 연락처]")
+        self.panel.copy.click()
+        self.assertIn("채우지 않은 [대괄호] 칸이 1개", self.panel.status.text())
+        self.panel.result.setPlainText("완성된 결과")
+        self.assertFalse(self.panel.fill_toggle.isVisible())
+        self.assertFalse(self.panel.fill_panel.isVisible())
 
     def test_failure_while_asleep_keeps_send_disabled(self):
         self.panel._pending = ("원문", "원문", "", "vireonix")
