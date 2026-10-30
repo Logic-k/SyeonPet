@@ -46,12 +46,28 @@ ASSETS = (
     "assets/wardrobe_presets/cardigan.png", "assets/wardrobe_presets/ribbon_hat.png",
     "assets/wardrobe_presets/scarf_blue.png", "assets/wardrobe_presets/scarf_pink.png",
     "assets/wardrobe_presets/sunhat.png",
+    "assets/wardrobe_presets/curated-v2/lookup.json",
+    "assets/wardrobe_presets/curated-v2/beret-main.png",
+    "assets/wardrobe_presets/curated-v2/beret-thinking.png",
+    "assets/wardrobe_presets/curated-v2/sunhat-main.png",
+    "assets/wardrobe_presets/curated-v2/sunhat-thinking.png",
+    "assets/wardrobe_presets/curated-v2/ribbon_hat-main.png",
+    "assets/wardrobe_presets/curated-v2/ribbon_hat-thinking.png",
+    "assets/wardrobe_presets/curated-v2/scarf_blue-main.png",
+    "assets/wardrobe_presets/curated-v2/scarf_blue-thinking.png",
+    "assets/wardrobe_presets/curated-v2/scarf_pink-main.png",
+    "assets/wardrobe_presets/curated-v2/scarf_pink-thinking.png",
+    "assets/wardrobe_presets/curated-v2/cardigan-main.png",
+    "assets/wardrobe_presets/curated-v2/cardigan-thinking.png",
+    "assets/wardrobe_presets/curated-v2/apron-main.png",
+    "assets/wardrobe_presets/curated-v2/apron-thinking.png",
 )
 # Only these public guides are bundled; other docs may contain private handoffs.
 GUIDES = (
     "docs/유초등교육과_션_사용가이드.html",
     "docs/유초등교육과_션_사용가이드.pdf",
     "docs/SPRITE_WARDROBE.md",
+    "docs/WARDROBE_CURATION.md",
 )
 DIST_INFOS = (
     "pyside6-6.11.2.dist-info", "pyside6_essentials-6.11.2.dist-info",
@@ -91,6 +107,7 @@ SyeonPet.exe를 실행하세요. run.cmd는 동일한 소스를 실행하는 대
 기본 정리 (AI 사용 안 함)를 선택하면 외부 AI 호출 없이 입력을 정리합니다.
 션을 우클릭하여 션이 옷장을 열고 장식이나 검증한 외형 팩을 선택할 수 있습니다.
 스프라이트 팩 형식은 docs/SPRITE_WARDROBE.md를 참고하세요.
+자세별 의상 제작 기록은 docs/WARDROBE_CURATION.md를 참고하세요.
 새 업데이트는 서명 확인 후 준비되며 션 메뉴에서 종료하고 다시 실행할 때 적용됩니다.
 이전 v0.1.5 이하에서는 자동 업데이트를 사용할 수 없어 이 버전을 한 번 직접 설치해야 합니다.
 사용 방법은 docs/유초등교육과_션_사용가이드.html 또는

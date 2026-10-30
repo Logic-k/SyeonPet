@@ -8,7 +8,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 from pet import ASSETS, PetWidget, SpriteBank
@@ -30,26 +30,50 @@ class WardrobePresetTests(unittest.TestCase):
     def test_head_presets_follow_all_existing_frames_without_mutation(self):
         states = self.bank.states
         self.assertEqual(sum(len(meta["frames"]) for meta in states.values()), 81)
-        for state, meta in states.items():
-            for frame in meta["frames"]:
-                original = rgba(frame)
-                for name in ("beret", "sunhat", "ribbon_hat"):
+        for name in ("beret", "sunhat", "ribbon_hat"):
+            for state, meta in states.items():
+                for frame in meta["frames"]:
+                    original = rgba(frame)
                     with self.subTest(state=state, name=name):
                         self.assertNotEqual(rgba(decorate_preset(frame, name)), original)
                         self.assertEqual(rgba(frame), original)
 
-    def test_body_presets_preserve_colored_foreground_and_background(self):
-        for state, meta in self.bank.states.items():
-            for frame in meta["frames"]:
-                original = rgba(frame)
-                for name in ("scarf_blue", "scarf_pink", "cardigan", "apron"):
+    def test_body_presets_preserve_saturated_foreground_and_silhouette(self):
+        for name in ("scarf_blue", "scarf_pink", "cardigan", "apron"):
+            for state, meta in self.bank.states.items():
+                for frame in meta["frames"]:
+                    original = rgba(frame)
                     dressed = rgba(decorate_preset(frame, name))
                     self.assertEqual(len(dressed), len(original))
+                    self.assertEqual(dressed[3::4], original[3::4],
+                                     f"{name} changed alpha in {state}")
                     for i in range(0, len(original), 4):
                         r, g, b, a = original[i:i + 4]
-                        if a <= 230 or min(r, g, b) <= 205 or max(r, g, b) - min(r, g, b) >= 28:
-                            self.assertEqual(dressed[i:i + 4], original[i:i + 4],
-                                             f"{name} changed foreground in {state}")
+                        # Neutral garment shadows can change to create a
+                        # continuous cloth surface. Keep saturated foreground
+                        # (bag, cheeks, leaf, beak/feet) and dark outlines.
+                        if (a > 230 and max(r, g, b) - min(r, g, b) >= 50) or max(r, g, b) < 90:
+                            if dressed[i:i + 4] != original[i:i + 4]:
+                                self.fail(f"{name} changed foreground in {state}")
+
+    def test_curated_atlases_cover_every_original_frame(self):
+        for name in PRESETS:
+            for state, meta in self.bank.states.items():
+                for frame in meta["frames"]:
+                    self.assertIsNotNone(wardrobe_presets._curated_frame(frame, name),
+                                         f"{name}: {state} missing curated frame")
+                    self.assertLessEqual(len(wardrobe_presets._CURATED_SHEETS), 2)
+
+    def test_changed_user_frame_uses_existing_dynamic_fallback(self):
+        original = self.bank.states["idle"]["frames"][0].copy()
+        painter = QPainter(original)
+        painter.setPen(QColor("#dd3412"))
+        painter.drawPoint(1, 1)
+        painter.end()
+        before = rgba(original)
+        self.assertIsNone(wardrobe_presets._curated_frame(original, "beret"))
+        self.assertNotEqual(rgba(decorate_preset(original, "beret")), before)
+        self.assertEqual(rgba(original), before)
 
     def test_preset_choice_is_persistent_and_original_is_reversible(self):
         with tempfile.TemporaryDirectory() as directory:

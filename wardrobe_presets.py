@@ -28,6 +28,56 @@ _ASSETS = Path(__file__).resolve().parent / "assets" / "wardrobe_presets"
 _IMAGE_CACHE = {}
 _POSITION_CACHE = OrderedDict()
 _PRECOMPUTED = None
+_CURATED_LOOKUP = None
+_CURATED_SHEETS = OrderedDict()
+
+
+def _curated_frame(frame, choice):
+    """Use the reviewed full-frame atlas only for an exact original frame.
+
+    Imported packs with different pixels keep the existing dynamic rendering
+    path below. Only the current two sheets are retained to avoid loading the
+    seven full atlases together.
+    """
+    global _CURATED_LOOKUP
+    if _CURATED_LOOKUP is None:
+        try:
+            path = _ASSETS / "curated-v2" / "lookup.json"
+            if path.stat().st_size > 128 * 1024:
+                raise ValueError("curated lookup too large")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("schema") != 1 or not isinstance(data.get("frames"), dict):
+                raise ValueError("invalid curated lookup")
+            if len(data["frames"]) > 256:
+                raise ValueError("invalid curated frame count")
+            _CURATED_LOOKUP = data["frames"]
+        except (OSError, ValueError, TypeError, AttributeError, UnicodeError):
+            _CURATED_LOOKUP = {}
+    image = frame.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+    if image.width() != 256 or image.height() != 256:
+        return None
+    entry = _CURATED_LOOKUP.get(hashlib.sha256(bytes(image.constBits())).hexdigest())
+    if (not isinstance(entry, list) or len(entry) != 5
+            or entry[0] not in ("main", "thinking")
+            or any(type(v) is not int for v in entry[1:])
+            or entry[1] < 0 or entry[2] < 0 or entry[3:] != [256, 256]):
+        return None
+    kind, x, y, width, height = entry
+    key = (choice, kind)
+    if key not in _CURATED_SHEETS:
+        sheet = QPixmap(str(_ASSETS / "curated-v2" / f"{choice}-{kind}.png"))
+        if sheet.isNull():
+            return None
+        _CURATED_SHEETS[key] = sheet
+        while len(_CURATED_SHEETS) > 2:
+            _CURATED_SHEETS.popitem(last=False)
+    else:
+        _CURATED_SHEETS.move_to_end(key)
+    sheet = _CURATED_SHEETS[key]
+    if x + width > sheet.width() or y + height > sheet.height():
+        return None
+    result = sheet.copy(x, y, width, height)
+    return None if result.isNull() else result
 
 
 def _known_anchors():
@@ -165,13 +215,16 @@ def _anchors(frame):
 def decorate_preset(frame: QPixmap, choice: str) -> QPixmap:
     """Return a dressed frame; missing/unsupported frames remain unchanged.
 
-    Headwear follows each source frame's leaf. Bodywear is limited to pale
-    body pixels below the cheeks so the face, bag and wings remain in front.
-    The body may be partly or entirely hidden in reclining or obscured poses.
+    Exact original frames use the prebuilt pose-specific atlas. Imported
+    characters use the earlier dynamic leaf/body placement as a fallback.
+    Bodywear can be partly or entirely hidden in reclining or obscured poses.
     """
     if choice not in PRESETS or frame.isNull():
         return frame
     try:
+        curated = _curated_frame(frame, choice)
+        if curated is not None:
+            return curated
         anchors, asset = _anchors(frame), _image(choice)
         if anchors is None or asset.isNull():
             return frame

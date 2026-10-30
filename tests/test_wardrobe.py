@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 
 from pet import ASSETS, PetWidget, SpriteBank
@@ -74,6 +74,87 @@ class WardrobeTests(unittest.TestCase):
         self.assertEqual(another.wardrobe_choice, "original")
         another.close()
 
+    def test_motion_preview_uses_real_frames_without_changing_pet_motion(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            self.pet.set_wardrobe_choice("bow")
+            old_state, old_frame = self.pet.state, self.pet.frame_idx
+            self.assertEqual(window.motion_combo.count(), len(self.bank.states))
+            for state, meta in self.bank.states.items():
+                with self.subTest(state=state):
+                    index = window.motion_combo.findData(state)
+                    self.assertGreaterEqual(index, 0)
+                    window.motion_combo.setCurrentIndex(index)
+                    self.assertEqual(window.preview_slider.maximum(), len(meta["frames"]) - 1)
+                    window.preview_slider.setValue(len(meta["frames"]) - 1)
+                    self.assertEqual(window.preview_count.text(), f'{len(meta["frames"])} / {len(meta["frames"])}')
+                    self.assertIn(window.preview_count.text(), window.preview_count.accessibleName())
+                    expected = decorate_frame(meta["frames"][-1], "bow").scaled(
+                        150, 150, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+                    self.assertEqual(pixels(window.preview.pixmap()), pixels(expected))
+            self.assertEqual((self.pet.state, self.pet.frame_idx), (old_state, old_frame))
+        finally:
+            window.close()
+
+    def test_motion_preview_play_pause_flip_and_close(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            self.assertIn("반복", window.preview_play.accessibleDescription())
+            window.motion_combo.setCurrentIndex(window.motion_combo.findData("walk"))
+            unflipped = pixels(window.preview.pixmap())
+            window.preview_flip.setChecked(True)
+            self.assertNotEqual(pixels(window.preview.pixmap()), unflipped)
+            window.preview_play.click()
+            self.assertTrue(window._preview_playing)
+            self.assertTrue(window._preview_timer.isActive())
+            window.motion_combo.setCurrentIndex(window.motion_combo.findData("sleep"))
+            self.assertTrue(window._preview_playing)
+            self.assertTrue(window._preview_timer.isActive())
+            self.assertEqual(window.preview_slider.value(), 0)
+            before = window.preview_slider.value()
+            window._advance_preview()
+            self.assertEqual(window.preview_slider.value(), before + 1)
+            window.preview_play.click()
+            self.assertFalse(window._preview_playing)
+            self.assertFalse(window._preview_timer.isActive())
+            window.preview_play.click()
+            window.close()
+            self.assertFalse(window._preview_timer.isActive())
+            self.assertEqual(window.preview_play.text(), "재생")
+        finally:
+            window.close()
+
+    def test_hiding_window_stops_preview_animation(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            window.show()
+            self.app.processEvents()
+            window.preview_play.click()
+            self.assertTrue(window._preview_timer.isActive())
+            window.hide()
+            self.app.processEvents()
+            self.assertFalse(window._preview_playing)
+            self.assertFalse(window._preview_timer.isActive())
+            self.assertEqual(window.preview_play.text(), "재생")
+        finally:
+            window.close()
+
+    def test_quick_choice_and_existing_list_remain_in_sync(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            window.choice_combo.setCurrentIndex(window.choice_combo.findData("bow"))
+            self.assertTrue(window.buttons["bow"].isChecked())
+            self.assertEqual(self.pet.wardrobe_choice, "bow")
+            window.buttons["star"].click()
+            self.assertEqual(window.choice_combo.currentData(), "star")
+            self.assertEqual(self.pet.wardrobe_choice, "star")
+            window.choice_combo.setCurrentIndex(window.choice_combo.findData("original"))
+            self.assertTrue(window.buttons["original"].isChecked())
+            self.assertEqual(self.pet.wardrobe_choice, "original")
+        finally:
+            window.close()
+
     def test_premade_outfits_apply_and_survive_restart(self):
         window = WardrobeWindow(self.pet)
         self.assertGreaterEqual(len(PRESETS), 6)
@@ -95,7 +176,7 @@ class WardrobeTests(unittest.TestCase):
 
     def test_imported_pack_restores_and_invalid_pack_does_not_replace_current(self):
         root = Path(self.temp.name) / "packs"
-        with patch("pet.pack_root", return_value=root):
+        with patch("pet.pack_root", return_value=root), patch("wardrobe.pack_root", return_value=root):
             imported = import_sprite_pack(ASSETS, root)
             self.pet.set_wardrobe_pack(imported.name)
             self.assertEqual(self.pet.wardrobe_pack, imported.name)
@@ -105,6 +186,13 @@ class WardrobeTests(unittest.TestCase):
             another = PetWidget(self.bank, wardrobe_settings=self.settings)
             another.tick.stop()
             self.assertEqual(another.wardrobe_pack, imported.name)
+            window = WardrobeWindow(another)
+            window.motion_combo.setCurrentIndex(window.motion_combo.findData("walk"))
+            window.pack_combo.setCurrentIndex(window.pack_combo.findData("original"))
+            self.assertEqual(window.motion_combo.currentData(), "walk")
+            self.assertEqual(window.preview_slider.maximum(), len(self.bank.states["walk"]["frames"]) - 1)
+            self.assertEqual(another.wardrobe_pack, "original")
+            window.close()
             another.set_wardrobe_pack("original")
             self.assertIs(another.sprites, self.bank)
             self.assertTrue(imported.exists())
