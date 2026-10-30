@@ -117,6 +117,7 @@ class PromptConversation(QWidget):
         self.provider.addItem("기본 정리 (AI 사용 안 함)", "offline")
         self.provider.addItem("AI 정리 · Vireonix", "vireonix")
         self.provider.addItem("AI 정리 · Pollinations Classic", "pollinations-classic")
+        self.provider.setCurrentIndex(self.provider.findData("vireonix"))
         self.provider.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.provider.setMinimumContentsLength(12)
         self.provider.currentIndexChanged.connect(self._provider_changed)
@@ -166,7 +167,7 @@ class PromptConversation(QWidget):
         self.result.setPlaceholderText("정리한 결과가 여기에 표시됩니다. 직접 수정할 수 있어요.")
         self.copy = QPushButton("결과 복사")
         self.copy.clicked.connect(self._copy_result)
-        self.status = _StatusText("기본 정리는 입력을 구조화하며 AI 재작성은 하지 않습니다.")
+        self.status = _StatusText("요청을 입력하고 정리 방식을 확인해 주세요.")
         self.status.setObjectName("statusText")
 
         layout = QVBoxLayout(self)

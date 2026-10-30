@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent, QTextCursor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from optimizer_chat import PromptConversation
 from optimizer_library import LibraryDialog, LibraryStore
@@ -43,9 +43,33 @@ class PromptConversationTests(unittest.TestCase):
         self.assertFalse(self.panel._busy, "worker did not complete")
 
     def _submit_offline(self, text):
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("offline"))
         self.panel.input.setPlainText(text)
         self.panel.submit()
         self._wait_idle()
+
+    def test_default_vireonix_never_sends_without_confirmation(self):
+        self.assertEqual(self.panel.provider.currentData(), "vireonix")
+        self.assertIn("전송 전 다시 확인", self.panel.provider_note.text())
+        with patch("optimizer_chat.optimize_ai") as ai, \
+             patch("optimizer_chat.threading.Thread") as thread:
+            fresh = PromptConversation()
+            self.assertEqual(fresh.provider.currentData(), "vireonix")
+            self.app.processEvents()
+            ai.assert_not_called()
+            thread.assert_not_called()
+            fresh.close()
+            self.panel.input.setPlainText("가상의 업무 요청")
+            self.panel.submit()
+            self.assertTrue(self.panel._confirmation.isVisible())
+            self.assertIn("Vireonix", self.panel._confirmation.text())
+            ai.assert_not_called()
+            thread.assert_not_called()
+            self.panel._confirmation.button(QMessageBox.StandardButton.No).click()
+            self.app.processEvents()
+            ai.assert_not_called()
+            thread.assert_not_called()
+            self.assertEqual(self.panel.input.toPlainText(), "가상의 업무 요청")
 
     def test_compact_history_toggle_preserves_the_conversation_and_draft(self):
         self._submit_offline("회의 메모를 정리해 주세요")
@@ -76,6 +100,7 @@ class PromptConversationTests(unittest.TestCase):
     def test_thread_start_failure_resets_busy_and_preserves_input(self):
         transitions = []
         self.panel.busy_changed.connect(transitions.append)
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("offline"))
         self.panel.input.setPlainText("보존할 요청")
         with patch("optimizer_chat.threading.Thread") as thread:
             thread.return_value.start.side_effect = RuntimeError("thread creation failed")
@@ -279,6 +304,8 @@ class PromptConversationTests(unittest.TestCase):
 
     def test_modeless_template_selection_during_request_preserves_changed_input(self):
         from optimizer_core import create_offline_prompt
+
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("offline"))
 
         release = threading.Event()
         started = threading.Event()

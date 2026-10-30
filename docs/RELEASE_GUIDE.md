@@ -28,7 +28,7 @@
 Windows에서 저장소 루트를 기준으로 Python 3.10 이상을 사용합니다. 다음 명령은 `version.py`의 버전과 일치해야 하며 ZIP은 저장소 밖의 **아직 존재하지 않는** 경로에 생성합니다.
 
 ```powershell
-python tools/build_release.py --version 0.1.3 --output <새_출력_폴더>/SyeonPet-0.1.3-windows.zip
+python tools/build_release.py --version 0.1.4 --output <새_출력_폴더>/SyeonPet-0.1.4-windows.zip
 ```
 
 필요하면 `--revision <40자리_커밋_SHA>`를 추가해 패키지 대상 파일이 해당 커밋과 일치하는지 검사할 수 있습니다. 스크립트는 기존 ZIP과 `.sha256`을 덮어쓰지 않고, 허용 목록에 있는 런타임·소스·자산만 포함합니다. 사용자 `config.json` 대신 공개 기본 설정을 사용하고, 보관함과 로컬 인수인계 문서는 넣지 않습니다. ZIP의 `package-manifest.json`에는 포함 파일별 SHA-256이 기록됩니다.

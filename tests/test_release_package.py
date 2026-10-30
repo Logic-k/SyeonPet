@@ -33,6 +33,8 @@ class ReleasePackageTests(unittest.TestCase):
             shutil.copyfile(source, target)
         (cls.snapshot / "Lib/site-packages/PySide6/user-private.json").write_text(
             '{"sentinel":"do-not-distribute"}', encoding="utf-8")
+        (cls.snapshot / "docs/HANDOFF_CURRENT.md").write_text(
+            "private handoff; do not distribute", encoding="utf-8")
         cls.first = cls.outdir / "first.zip"
         cls.second = cls.outdir / "second.zip"
         cls.version = builder._source_version(cls.snapshot)
@@ -55,13 +57,21 @@ class ReleasePackageTests(unittest.TestCase):
                          "update_checker.py", "version.py", "assets/manifest.json",
                          "assets/prompt_templates.json", "assets/seobu_office_templates.json",
                          "assets/thinking/manifest.json", "assets/thinking/sprite-sheet-alpha.png",
+                         "docs/유초등교육과_션_사용가이드.html", "docs/유초등교육과_션_사용가이드.pdf",
                          "Lib/site-packages/PySide6/QtWidgets.pyd",
                          "Lib/site-packages/PySide6/plugins/platforms/qwindows.dll",
                          "licenses/PYTHON-3.12.7.txt", "licenses/LGPL-3.0-only.txt"):
                 self.assertIn(name, names)
-            self.assertFalse(any(name.startswith((".git/", "docs/", "tests/", "local-runtime/"))
+            self.assertEqual({name for name in names if name.startswith("docs/")}, set(builder.GUIDES))
+            self.assertFalse(any(name.startswith((".git/", "tests/", "local-runtime/"))
                                  or "__pycache__" in name or name.endswith("library.json")
                                  for name in names))
+            self.assertNotIn("docs/HANDOFF_CURRENT.md", names)
+            for name in builder.GUIDES:
+                self.assertEqual(archive.read(name), (self.snapshot / name).read_bytes())
+            instructions = archive.read("사용안내.txt").decode("utf-8")
+            for name in builder.GUIDES:
+                self.assertIn(name, instructions)
             self.assertNotIn("assets/thinking/source-strip.png", names)
             self.assertNotIn("assets/thinking/reference.png", names)
             self.assertNotIn("Lib/site-packages/PySide6/user-private.json", names)
@@ -114,8 +124,12 @@ class ReleasePackageTests(unittest.TestCase):
         repo.mkdir()
         (repo / "version.py").write_bytes(b'APP_VERSION = "0.1.0"\r\n')
         (repo / "run.cmd").write_bytes(b"@echo off\r\necho private-working-change\r\n")
-        files = {"version.py": repo / "version.py", "run.cmd": repo / "run.cmd"}
-        data = {"version.py": b'APP_VERSION = "0.1.0"\n', "run.cmd": b"@echo off\necho committed\n"}
+        (repo / "docs").mkdir()
+        guide = "docs/유초등교육과_션_사용가이드.html"
+        (repo / guide).write_bytes(b"private working copy of guide")
+        files = {name: repo / name for name in ("version.py", "run.cmd", guide)}
+        data = {"version.py": b'APP_VERSION = "0.1.0"\n', "run.cmd": b"@echo off\necho committed\n",
+                guide: b"public committed guide"}
         blobs = {name: builder._git_blob(content) for name, content in data.items()}
         blobs["tools/build_release.py"] = "b" * 40
         committed = {blobs[name]: value for name, value in data.items()}
@@ -130,6 +144,8 @@ class ReleasePackageTests(unittest.TestCase):
         with zipfile.ZipFile(output) as archive:
             self.assertEqual(archive.read("run.cmd"), data["run.cmd"])
             self.assertNotIn(b"private-working-change", archive.read("run.cmd"))
+            self.assertEqual(archive.read(guide), data[guide])
+            self.assertNotIn(b"private working copy", archive.read(guide))
             self.assertEqual(json.loads(archive.read("package-manifest.json"))["source_commit"], "a" * 40)
 
     def test_revision_import_audit_uses_commit_sources(self):

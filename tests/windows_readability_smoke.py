@@ -120,6 +120,7 @@ def run():
              patch("optimizer_chat.optimize_ai", side_effect=blocked):
             chat.show()
             prompt.input.setPlainText("회의 내용을 세 항목으로 정리해 주세요.")
+            prompt.provider.setCurrentIndex(prompt.provider.findData("offline"))
             prompt.submit()
             deadline = time.monotonic() + 5
             while prompt.is_busy and time.monotonic() < deadline:

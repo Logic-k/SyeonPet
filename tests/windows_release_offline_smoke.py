@@ -104,7 +104,8 @@ class TestApplication(QApplication):
             state["panel"] = panels[0]
             panels[0].show_prompt_near_pet()
             p = panels[0].prompt_conversation
-            assert p.provider.currentData() == "offline"
+            assert p.provider.currentData() == "vireonix"
+            p.provider.setCurrentIndex(p.provider.findData("offline"))
             p.input.setPlainText("회의 결과를 세 항목으로 요약해 주세요.")
             p.send.click()
             QTimer.singleShot(30, check)

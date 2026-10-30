@@ -19,9 +19,20 @@ from PySide6.QtCore import QObject, QSettings, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 import json
 import _production_main as entry
+from chat import ChatPanel
 
-QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(Path.cwd() / "qa-settings"))
+class IsolatedChatPanel(ChatPanel):
+    def __init__(self, *args, **kwargs):
+        settings_path = Path.cwd() / "qa-settings" / "conversation.ini"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+        settings.setFallbacksEnabled(False)
+        settings.setValue("opacityPercent", 91)
+        settings.sync()
+        kwargs["settings"] = settings
+        super().__init__(*args, **kwargs)
+        assert Path(self._settings.fileName()).resolve() == settings_path.resolve()
+        assert self.opacity_slider.value() == 91
 
 class TestApplication(QApplication):
     def __init__(self, args):
@@ -37,6 +48,7 @@ class TestApplication(QApplication):
         panel = panels[0]
         panel.show_prompt_near_pet()
         prompt = panel.prompt_conversation
+        prompt.provider.setCurrentIndex(prompt.provider.findData("offline"))
         prompt.input.setPlainText("회의록을 세 항목으로 정리해 주세요.")
         prompt.submit()
         self.panel = panel
@@ -58,6 +70,7 @@ class NoNetworkUpdateChecker(QObject):
         return None
 
 entry.QApplication = TestApplication
+entry.ChatPanel = IsolatedChatPanel
 entry.UpdateChecker = NoNetworkUpdateChecker
 raise SystemExit(entry.main())
 '''

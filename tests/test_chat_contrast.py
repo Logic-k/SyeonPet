@@ -97,6 +97,7 @@ class ChatWindowTests(unittest.TestCase):
         prompt.history_toggle.click()
         self.app.processEvents()
         prompt.input.setFocus()
+        prompt.provider.setCurrentIndex(prompt.provider.findData("offline"))
         prompt.submit()
         self.app.processEvents()
         notice = prompt.inline_notice
@@ -131,6 +132,7 @@ class ChatWindowTests(unittest.TestCase):
         completed = []
         prompt.result_ready.connect(lambda: completed.append(True))
         self.app.processEvents()
+        prompt.provider.setCurrentIndex(prompt.provider.findData("offline"))
         prompt.submit()
         deadline = time.monotonic() + 5
         while prompt.is_busy and time.monotonic() < deadline:

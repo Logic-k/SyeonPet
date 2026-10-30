@@ -40,6 +40,11 @@ ASSETS = (
     "assets/seobu_office_templates.json", "assets/thinking/manifest.json",
     "assets/thinking/sprite-sheet-alpha.png",
 )
+# Only these public guides are bundled; other docs may contain private handoffs.
+GUIDES = (
+    "docs/유초등교육과_션_사용가이드.html",
+    "docs/유초등교육과_션_사용가이드.pdf",
+)
 DIST_INFOS = (
     "pyside6-6.11.2.dist-info", "pyside6_essentials-6.11.2.dist-info",
     "shiboken6-6.11.2.dist-info",
@@ -74,7 +79,10 @@ SyeonPet.exe를 실행하세요. run.cmd는 동일한 소스를 실행하는 대
 설정 config.json은 새 배포물의 공개 기본값입니다. 기존 앱의 개인 설정을 자동으로
 덮어쓰거나 이전하지 않습니다. 보관함은 사용자 로컬 앱 데이터에 별도로 저장됩니다.
 외부 AI로 보내기 전에는 기관의 개인정보 지침과 허용 서비스를 확인하세요.
-기본 정리는 AI 재작성 없이 입력을 정리합니다. 자세한 제3자 고지는 licenses를 보세요.
+처음 선택된 Vireonix는 사용자가 전송을 확인할 때만 요청을 보냅니다.
+기본 정리 (AI 사용 안 함)를 선택하면 외부 AI 호출 없이 입력을 정리합니다.
+사용 방법은 docs/유초등교육과_션_사용가이드.html 또는
+docs/유초등교육과_션_사용가이드.pdf에서 확인하세요. 자세한 제3자 고지는 licenses를 보세요.
 """
 
 
@@ -126,7 +134,7 @@ def _check_app_imports(sources: dict[str, str], local_modules: set[str]) -> None
 
 def collect_files(root: Path) -> dict[str, Path]:
     root = root.resolve()
-    result = {name: _file(root, name) for name in (*APP_FILES, *ROOT_RUNTIME, *ASSETS, "run.cmd")}
+    result = {name: _file(root, name) for name in (*APP_FILES, *ROOT_RUNTIME, *ASSETS, *GUIDES, "run.cmd")}
     result["config.json"] = _file(root, "tools/default-config.json")
     result["licenses/THIRD_PARTY.md"] = _file(root, "tools/THIRD_PARTY.md")
     for name in LICENSES:

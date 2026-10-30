@@ -52,6 +52,7 @@ class NetworkDisconnectTests(unittest.TestCase):
         self.app.processEvents()
 
     def test_dns_failure_then_explicit_retry_preserves_every_draft(self):
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("offline"))
         self.panel.input.setPlainText("원래 합성 업무 요청")
         self.panel.send.click()
         self._wait_idle()

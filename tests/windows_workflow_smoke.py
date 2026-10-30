@@ -108,7 +108,8 @@ def run():
             chat = state["chat"]
             p = chat.prompt_conversation
             assert chat.isVisible() and p.isVisible() and not hasattr(chat, "tabs")
-            assert p.provider.currentData() == "offline"
+            assert p.provider.currentData() == "vireonix"
+            p.provider.setCurrentIndex(p.provider.findData("offline"))
             p.input.setPlainText(prompt_draft)
             p.result.setPlainText(result_draft)
             find_action("완전히 가만히 재우기").trigger()
