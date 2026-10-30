@@ -29,27 +29,15 @@ spec=importlib.util.spec_from_file_location('draft_wearables',Path(__file__).wit
 draft=importlib.util.module_from_spec(spec); spec.loader.exec_module(draft)
 draft.ROOT=SOURCE_MAIN/'frames'; draft.THINKING=SOURCE_THINKING/'frames'
 data=draft.DATA
-angles=json.loads((ROOT/'assets'/'wardrobe_presets'/'hat_pose_v2.json').read_text(encoding='utf8'))
-print('angle schema', list(angles.keys()))
-anglemap=angles['angle_degrees']
+hspec=importlib.util.spec_from_file_location('hats',Path(__file__).with_name('hats.py'))
+hats=importlib.util.module_from_spec(hspec); hspec.loader.exec_module(hats)
+hat_art={name:hats.draw_hat(name) for name in hats.HATS}
 def digest(pm):
  im=pm.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
  return hashlib.sha256(bytes(im.constBits())).hexdigest()
-def hat(state,idx,name,framehash):
+def hat(state,idx,name):
  raw=(SOURCE_THINKING/'frames'/state/f'frame-{idx}.png') if state=='thinking' else (SOURCE_MAIN/'frames'/state/f'frame-{idx}.png')
- im=Image.open(raw).convert('RGBA')
- leaf=data[state][idx]['leaf']['bbox']; left,top,right,bottom=leaf
- asset=Image.open(ROOT/'assets'/'wardrobe_presets'/(name+'_v2.png')).convert('RGBA')
- # Seat the hat on the crown: wider than the leaf and low enough that the
- # brim rests on the head, so only the leaf tip emerges above the hat.
- asset=asset.crop(asset.getbbox()); scale=min((right-left+1)*1.15/asset.width,(bottom-top+1)*.80/asset.height)
- asset=asset.resize((max(1,round(asset.width*scale)),max(1,round(asset.height*scale))),Image.Resampling.LANCZOS)
- angle=anglemap.get(framehash,0)
- if isinstance(angle,dict): angle=angle.get('angle_degrees',0)
- asset=asset.rotate(-float(angle),resample=Image.Resampling.BICUBIC,expand=True)
- x=round((left+right-asset.width)/2); y=round(bottom+asset.height*.12-asset.height)
- im.alpha_composite(asset,(max(0,x),max(0,y)))
- return im
+ return hats.wear_hat(Image.open(raw),data[state][idx],hats.head_tilt(data[state],idx),hat_art[name])
 
 SCRATCH.mkdir(parents=True); DEST.mkdir(parents=True)
 lookup={}; duplicates=[]
@@ -63,7 +51,7 @@ for choice in ('beret','sunhat','ribbon_hat','scarf_blue','scarf_pink','cardigan
   kind='thinking' if state=='thinking' else 'main'; run=basedirs[kind]
   for idx,frame in enumerate(meta['frames']):
    key=digest(frame)
-   if choice in ('beret','sunhat','ribbon_hat'): image=hat(state,idx,choice,key)
+   if choice in ('beret','sunhat','ribbon_hat'): image=hat(state,idx,choice)
    else: image=draft.test(state,idx,{'scarf_blue':'scarf'}.get(choice,choice))
    image.save(run/'frames'/state/f'frame-{idx}.png')
   print(choice,state,flush=True)

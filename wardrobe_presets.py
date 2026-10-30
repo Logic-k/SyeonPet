@@ -15,7 +15,7 @@ from PySide6.QtGui import QImage, QPainter, QPixmap, QRegion
 
 
 PRESETS = {
-    "beret": ("별 베레모", "작은 별 장식이 달린 남색 베레모예요."),
+    "beret": ("별 베레모", "작은 별 장식이 달린 파란 베레모예요."),
     "sunhat": ("해바라기 모자", "노란 꽃이 달린 햇살 모자예요."),
     "ribbon_hat": ("분홍 리본 모자", "분홍 리본으로 꾸민 모자예요."),
     "scarf_blue": ("하늘 목도리", "따뜻한 하늘색 목도리예요."),
