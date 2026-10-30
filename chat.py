@@ -137,8 +137,26 @@ class ChatPanel(QWidget):
     def has_pending_work(self) -> bool:
         return self.prompt_conversation.has_pending_work()
 
-    def request_app_quit(self, callback):
+    def export_update_state(self):
+        """Capture restart state; callers must securely retain it on failure."""
+        return {"schema": 1, "visible": self.isVisible(),
+                "conversation": self.prompt_conversation.export_update_state()}
+
+    def restore_update_state(self, state):
+        """Restore into a fresh panel and return whether it was open before."""
+        if (not isinstance(state, dict) or type(state.get("schema")) is not int
+                or state["schema"] != 1 or type(state.get("visible")) is not bool):
+            raise ValueError("복원할 대화창의 형식을 확인할 수 없습니다.")
+        self.prompt_conversation.restore_update_state(state.get("conversation"))
+        return state["visible"]
+
+    def request_app_quit(self, callback, preserve_for_update=False):
         """Confirm before terminating a request or discarding in-memory work."""
+        if preserve_for_update and self.is_busy:
+            self.prompt_conversation.status.setText(
+                "진행 중인 정리가 끝난 뒤 업데이트를 적용할 수 있어요. 입력과 결과는 그대로 유지됩니다.")
+            self.prompt_conversation._show_notice("진행 중인 정리가 끝난 뒤 업데이트를 적용해 주세요.")
+            return
         if not self.is_busy and not self.has_pending_work():
             callback()
             return
@@ -149,8 +167,11 @@ class ChatPanel(QWidget):
         conversation = self.prompt_conversation
         snapshot = conversation.quit_snapshot()
         was_busy = self.is_busy
-        message = ("종료하면 현재 대화와 작성 중인 내용이 사라집니다. "
-                   "필요한 내용은 보관함에 저장하거나 복사해 주세요.")
+        message = (("업데이트를 위해 현재 대화와 작성 중인 내용을 이 기기에 보관하고 "
+                    "다음 실행에서 복원합니다. 보관에 실패하면 종료하지 않습니다.")
+                   if preserve_for_update else
+                   ("종료하면 현재 대화와 작성 중인 내용이 사라집니다. "
+                    "필요한 내용은 보관함에 저장하거나 복사해 주세요."))
         if was_busy:
             message += "\n진행 중인 요청도 중단될 수 있습니다."
         dialog = QMessageBox(QMessageBox.Icon.Question, "션 종료", message,

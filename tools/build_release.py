@@ -22,7 +22,8 @@ APP_FILES = (
     "behavior.py", "bubble.py", "chat.py", "main.py", "onboarding.py",
     "optimizer_ai.py", "optimizer_chat.py", "optimizer_core.py",
     "optimizer_library.py", "optimizer_templates.py", "pet.py",
-    "version.py", "update_checker.py",
+    "version.py", "update_checker.py", "update_trust.py", "updater_core.py",
+    "updater_switch.py", "updater_ui.py", "wardrobe.py", "wardrobe_packs.py",
 )
 ROOT_RUNTIME = (
     "SyeonPet.exe", "pythonw.exe", "python3.dll", "python312.dll",
@@ -44,6 +45,7 @@ ASSETS = (
 GUIDES = (
     "docs/유초등교육과_션_사용가이드.html",
     "docs/유초등교육과_션_사용가이드.pdf",
+    "docs/SPRITE_WARDROBE.md",
 )
 DIST_INFOS = (
     "pyside6-6.11.2.dist-info", "pyside6_essentials-6.11.2.dist-info",
@@ -81,6 +83,10 @@ SyeonPet.exe를 실행하세요. run.cmd는 동일한 소스를 실행하는 대
 외부 AI로 보내기 전에는 기관의 개인정보 지침과 허용 서비스를 확인하세요.
 처음 선택된 Vireonix는 사용자가 전송을 확인할 때만 요청을 보냅니다.
 기본 정리 (AI 사용 안 함)를 선택하면 외부 AI 호출 없이 입력을 정리합니다.
+션을 우클릭하여 션이 옷장을 열고 장식이나 검증한 외형 팩을 선택할 수 있습니다.
+스프라이트 팩 형식은 docs/SPRITE_WARDROBE.md를 참고하세요.
+새 업데이트는 서명 확인 후 준비되며 션 메뉴에서 종료하고 다시 실행할 때 적용됩니다.
+이전 v0.1.5 이하에서는 자동 업데이트를 사용할 수 없어 이 버전을 한 번 직접 설치해야 합니다.
 사용 방법은 docs/유초등교육과_션_사용가이드.html 또는
 docs/유초등교육과_션_사용가이드.pdf에서 확인하세요. 자세한 제3자 고지는 licenses를 보세요.
 """

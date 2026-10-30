@@ -60,6 +60,52 @@ class ChatWindowTests(unittest.TestCase):
         self.assertEqual(prompt.input.toPlainText(), "요청 초안 <b>그대로</b>")
         self.assertEqual(prompt.result.toPlainText(), "수정한 결과")
 
+    def test_update_quit_confirmation_exports_without_losing_draft(self):
+        self.panel.show_near_pet()
+        self.panel.prompt_conversation.input.setPlainText("재시작할 때 보존할 내용")
+        exported = []
+        self.panel.request_app_quit(lambda: exported.append(self.panel.export_update_state()),
+                                    preserve_for_update=True)
+        dialog = self.panel._quit_dialog
+        self.assertIn("다음 실행에서 복원", dialog.text())
+        dialog.done(QMessageBox.StandardButton.Yes)
+        self.app.processEvents()
+        self.assertEqual(len(exported), 1)
+        self.assertEqual(exported[0]["conversation"]["input"], "재시작할 때 보존할 내용")
+
+    def test_update_quit_waits_for_processing(self):
+        prompt = self.panel.prompt_conversation
+        prompt.input.setPlainText("유지할 내용")
+        prompt._set_busy(True)
+        quit_calls = []
+        self.panel.request_app_quit(lambda: quit_calls.append(True), preserve_for_update=True)
+        self.assertEqual(quit_calls, [])
+        self.assertIn("정리가 끝난 뒤", prompt.inline_notice.text())
+        self.assertEqual(prompt.input.toPlainText(), "유지할 내용")
+        prompt._set_busy(False)
+
+    def test_update_restore_into_initially_hidden_window_preserves_template(self):
+        self.panel.show_near_pet()
+        prompt = self.panel.prompt_conversation
+        prompt.input.setPlainText("보존할 입력")
+        prompt._insert_template()
+        picker = prompt._template_dialog
+        picker.list.setCurrentRow(0)
+        picker.preview.setPlainText("작성 중인 템플릿")
+        state = self.panel.export_update_state()
+        picker.close()
+        self.panel.close()
+        self.panel = ChatPanel(self.pet, self.behavior, {}, settings=self.settings)
+        self.assertFalse(self.panel.isVisible())
+        self.assertTrue(self.panel.restore_update_state(state))
+        self.panel.show_near_pet()
+        self.app.processEvents()
+        restored = self.panel.prompt_conversation._template_dialog
+        self.assertTrue(restored.isVisible())
+        self.assertEqual(restored.preview.toPlainText(), "작성 중인 템플릿")
+        self.assertEqual(self.panel.prompt_conversation.input.toPlainText(), "보존할 입력")
+        restored.close()
+
     def test_window_fits_small_negative_screen_and_restores_minimum_on_larger_screen(self):
         prompt = self.panel.prompt_conversation
         prompt.input.setPlainText("보존할 입력")

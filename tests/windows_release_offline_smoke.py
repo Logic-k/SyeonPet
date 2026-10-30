@@ -14,11 +14,12 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 WRAPPER = r'''from pathlib import Path
-import json, socket, time, traceback
+import inspect, json, socket, time, traceback
 from PySide6.QtCore import QObject, QSettings, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox
 import _production_main as entry
 from chat import ChatPanel
+from pet import PetWidget
 import optimizer_ai
 
 state = {"phase": "offline", "dns": 0, "connect": 0}
@@ -38,6 +39,14 @@ class IsolatedChatPanel(ChatPanel):
         super().__init__(*args, **kwargs)
         assert Path(self._settings.fileName()).resolve() == settings_path.resolve()
         assert self.opacity_slider.value() == 91
+
+class IsolatedPet(PetWidget):
+    def __init__(self, *args, **kwargs):
+        if "wardrobe_settings" in inspect.signature(PetWidget.__init__).parameters:
+            settings = QSettings(str(Path.cwd() / "qa-settings" / "wardrobe.ini"), QSettings.Format.IniFormat)
+            settings.setFallbacksEnabled(False)
+            kwargs["wardrobe_settings"] = settings
+        super().__init__(*args, **kwargs)
 
 def fail(exc):
     Path("qa-error.txt").write_text(traceback.format_exc(), encoding="utf-8")
@@ -114,12 +123,25 @@ class TestApplication(QApplication):
 
 class NoNetworkUpdates(QObject):
     completed = Signal(object)
+    def __init__(self, *_args, **_kwargs):
+        super().__init__()
     def check(self, manual=False):
+        pass
+    def begin_shutdown(self):
+        pass
+    def cancel_shutdown(self):
         pass
 
 entry.QApplication = TestApplication
 entry.ChatPanel = IsolatedChatPanel
-entry.UpdateChecker = NoNetworkUpdates
+entry.PetWidget = IsolatedPet
+if hasattr(entry, "UpdatePreparer"):
+    entry.UpdatePreparer = NoNetworkUpdates
+    import wardrobe, pet
+    wardrobe.pack_root = lambda: Path.cwd() / "qa-packs"
+    pet.pack_root = wardrobe.pack_root
+else:
+    entry.UpdateChecker = NoNetworkUpdates
 optimizer_ai.socket.getaddrinfo = blocked_dns
 optimizer_ai.socket.create_connection = blocked_tcp
 raise SystemExit(entry.main())

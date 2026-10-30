@@ -22,6 +22,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 import main as pet_main
 import optimizer_chat
 from chat import ChatPanel
+from pet import PetWidget
+import wardrobe
 
 
 def run():
@@ -43,14 +45,32 @@ def run():
 
     class CapturedChat(ChatPanel):
         def __init__(self, *args, **kwargs):
-            kwargs["settings"] = QSettings(str(output / "settings.ini"), QSettings.Format.IniFormat)
+            settings = QSettings(str(output / "settings.ini"), QSettings.Format.IniFormat)
+            settings.setFallbacksEnabled(False)
+            kwargs["settings"] = settings
             super().__init__(*args, **kwargs)
             state["chat"] = self
+
+    class IsolatedPet(PetWidget):
+        def __init__(self, *args, **kwargs):
+            settings = QSettings(str(output / "wardrobe.ini"), QSettings.Format.IniFormat)
+            settings.setFallbacksEnabled(False)
+            kwargs["wardrobe_settings"] = settings
+            super().__init__(*args, **kwargs)
 
     class NoNetworkUpdates(QObject):
         completed = Signal(object)
 
+        def __init__(self, *_args, **_kwargs):
+            super().__init__()
+
         def check(self, manual=False):
+            pass
+
+        def begin_shutdown(self):
+            pass
+
+        def cancel_shutdown(self):
             pass
 
     def fail(exc):
@@ -94,6 +114,7 @@ def run():
             print("PASS: full sleep froze the sprite and frame blend toggle enabled and disabled")
             print("PASS: office category filter, template selection and offline prompt creation")
             print("PASS: pet right-click opened the shared tray menu and opacity remained adjustable")
+            print("PASS: tray wardrobe action opened the modeless chooser and retained the pet")
             print("PASS: six thinking frames loaded, busy state used thinking and later restored")
             print("PASS: no network or separate process was used")
             print("SCREENSHOTS:", output)
@@ -138,13 +159,24 @@ def run():
             menu = state["tray"].contextMenu()
             assert menu.isVisible() and event.isAccepted()
             menu.hide()
+            find_action("션이 옷장").trigger()
+            windows = [w for w in QApplication.topLevelWidgets()
+                       if isinstance(w, wardrobe.WardrobeWindow)]
+            assert len(windows) == 1 and windows[0].isVisible()
+            assert windows[0].pet is chat.pet
+            windows[0].close()
+            assert not windows[0].isVisible()
+            find_action("션이 옷장").trigger()
+            assert windows[0].isVisible()
+            windows[0].close()
             chat.opacity_slider.setValue(80)
             assert abs(chat.windowOpacity() - 0.8) < 0.02
             # Persist only in the isolated temporary INI and verify a new
             # panel picks it up; do not touch the actual user's settings.
             chat._settings.sync()
-            other = ChatPanel(pet, chat.behavior, {}, settings=QSettings(
-                str(output / "settings.ini"), QSettings.Format.IniFormat))
+            other_settings = QSettings(str(output / "settings.ini"), QSettings.Format.IniFormat)
+            other_settings.setFallbacksEnabled(False)
+            other = ChatPanel(pet, chat.behavior, {}, settings=other_settings)
             assert other.opacity_slider.value() == 80
             other.close()
             chat.opacity_slider.setValue(100)
@@ -204,11 +236,17 @@ def run():
     pet_main.QApplication = CapturedApplication
     pet_main.QSystemTrayIcon = CapturedTray
     pet_main.ChatPanel = CapturedChat
-    pet_main.UpdateChecker = NoNetworkUpdates
+    pet_main.PetWidget = IsolatedPet
+    pet_main.UpdatePreparer = NoNetworkUpdates
     pet_main.load_config = lambda: {"start_onboarding_on_launch": False, "ambient_chatter": False}
     pet_main.autostart_enabled = lambda: False
     sys.argv = [sys.argv[0]]
-    with patch.object(QProcess, "startDetached", side_effect=blocked), \
+    with patch.dict(os.environ, {"APPDATA": str(output / "appdata"),
+                                 "LOCALAPPDATA": str(output / "localappdata")}), \
+         patch.object(wardrobe, "pack_root", return_value=output / "packs"), \
+         patch("pet.pack_root", return_value=output / "packs"), \
+         patch.object(QApplication, "clipboard", side_effect=blocked), \
+         patch.object(QProcess, "startDetached", side_effect=blocked), \
          patch.object(QProcess, "start", side_effect=blocked), \
          patch.object(subprocess, "Popen", side_effect=blocked), \
          patch.object(os, "startfile", side_effect=blocked), \

@@ -17,6 +17,9 @@ from PySide6.QtCore import QPoint, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QMouseEvent, QPainter, QPixmap, QRegion, QTransform
 from PySide6.QtWidgets import QWidget
 
+from wardrobe import (decorate_frame, pack_root, read_pack_choice, read_wardrobe_choice,
+                      write_pack_choice, write_wardrobe_choice)
+
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
 
 
@@ -100,9 +103,21 @@ class PetWidget(QWidget):
     MAX_PHYSICS_STEP = 0.05  # avoid jumping across the screen after a stalled timer
     MAX_THROW_SPEED = 1800.0
 
-    def __init__(self, sprites: SpriteBank, display_size: int = 168):
+    def __init__(self, sprites: SpriteBank, display_size: int = 168, wardrobe_settings=None):
         super().__init__()
         self.sprites = sprites
+        self._original_sprites = sprites
+        self._wardrobe_settings = wardrobe_settings
+        self.wardrobe_choice = read_wardrobe_choice(wardrobe_settings)
+        self.wardrobe_pack = "original"
+        self.wardrobe_pack_error = ""
+        saved_pack = read_pack_choice(wardrobe_settings)
+        if saved_pack != "original":
+            try:
+                self.sprites = self._load_wardrobe_pack(saved_pack)
+                self.wardrobe_pack = saved_pack
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self.wardrobe_pack_error = "저장된 외형을 읽지 못해 기본 모습으로 열었어요: " + str(exc)
         self.display_size = display_size
         self.win_width = max(display_size, 300)  # room for the bubble
         self.base_height = display_size
@@ -170,9 +185,49 @@ class PetWidget(QWidget):
     def _frame_pm(self, idx: int) -> QPixmap:
         meta = self.sprites.states[self.state]
         pm = meta["frames"][idx % len(meta["frames"])]
+        pm = decorate_frame(pm, self.wardrobe_choice)
         if self.facing_left:
             pm = pm.transformed(QTransform().scale(-1, 1))
         return pm
+
+    def set_wardrobe_choice(self, choice: str) -> None:
+        """Change the optional accessory without changing source sprite files."""
+        choice = write_wardrobe_choice(choice, self._wardrobe_settings)
+        if choice != self.wardrobe_choice:
+            self.wardrobe_choice = choice
+            self._pm_cache.clear()
+            self._mask_cache.clear()
+            self._mask_blend_next = None
+            self._update_mask()
+            self.update()
+
+    def _load_wardrobe_pack(self, name: str) -> SpriteBank:
+        import re
+        from wardrobe_packs import validate_sprite_pack
+        if not re.fullmatch(r"pack-[0-9a-f]{32}", name):
+            raise ValueError("올바르지 않은 외형 이름입니다.")
+        folder = pack_root() / name
+        validate_sprite_pack(folder)
+        return SpriteBank(folder)
+
+    def set_wardrobe_pack(self, name: str) -> None:
+        """Validate and load before switching; failure retains the old bank."""
+        sprites = self._original_sprites if name == "original" else self._load_wardrobe_pack(name)
+        write_pack_choice(name, self._wardrobe_settings)
+        self.sprites = sprites
+        self.wardrobe_pack = name
+        self.wardrobe_pack_error = ""
+        if not self.sprites.has(self.state):
+            self.state = "idle"
+            self.frame_idx = 0
+            self._frame_elapsed = 0.0
+        else:
+            self.frame_idx = min(self.frame_idx, len(self.sprites.states[self.state]["frames"]) - 1)
+        self._pm_cache.clear()
+        self._mask_cache.clear()
+        self._mask_blend_next = None
+        self._update_mask()
+        self.update()
 
     def _current_pm(self) -> QPixmap:
         """The frame about to be drawn, with facing applied — mask and paint

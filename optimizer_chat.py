@@ -428,6 +428,151 @@ class PromptConversation(QWidget):
     def quit_snapshot(self):
         return self._request_snapshot(), self._open_template_snapshot()
 
+    def export_update_state(self):
+        """Return the unsaved conversation for a restart, without sending it.
+
+        The caller owns storage and must not restart on a failure.  A request,
+        consent prompt or library dialog is not resumable and must finish first.
+        """
+        if self._busy or QApplication.activeModalWidget() is not None:
+            raise RuntimeError("진행 중인 요청이나 확인창을 먼저 마쳐 주세요.")
+        for name in ("_confirmation", "_library_dialog"):
+            dialog = getattr(self, name, None)
+            try:
+                if dialog is not None and dialog.isVisible():
+                    raise RuntimeError("열려 있는 확인창이나 보관함을 먼저 닫아 주세요.")
+            except RuntimeError as exc:
+                if "already deleted" not in str(exc):
+                    raise
+
+        template = None
+        picker = getattr(self, "_template_dialog", None)
+        try:
+            if picker is not None and picker.isVisible():
+                template = {
+                    "current_id": picker._current_id,
+                    "preview": picker.preview.toPlainText(),
+                    "drafts": dict(picker._drafts),
+                    "search": picker.search.text(),
+                    "category": picker.category.currentData() or "",
+                    "office_only": picker.office_button.isChecked(),
+                }
+        except RuntimeError as exc:
+            if "already deleted" not in str(exc):
+                raise
+
+        return {
+            "schema": 1,
+            "original": self.original,
+            "revisions": list(self.revisions),
+            "results": list(self.results),
+            "result_revision_counts": list(self._result_revision_counts),
+            "shown_result": self._shown_result,
+            "result_labels": [self.result_choice.itemText(i) for i in range(self.result_choice.count())],
+            "input": self.input.toPlainText(),
+            "result": self.result.toPlainText(),
+            "conversation": self.conversation.toPlainText(),
+            "provider": self.provider.currentData(),
+            "task": self.task.currentData(),
+            "detail": self.detail.currentData(),
+            "history_open": self.history_toggle.isChecked(),
+            "status": self.status.text(),
+            "notice": self.inline_notice.text() if not self.inline_notice.isHidden() else None,
+            "template": template,
+        }
+
+    def restore_update_state(self, state):
+        """Restore a validated restart snapshot into an otherwise empty panel.
+
+        Reject unknown or incompatible data instead of silently dropping it.
+        The caller must keep the original snapshot if this method fails.
+        """
+        if self._busy or self.has_pending_work():
+            raise RuntimeError("작성 중인 대화가 있어 복원하지 않았습니다.")
+        if not isinstance(state, dict) or type(state.get("schema")) is not int or state["schema"] != 1:
+            raise ValueError("복원할 대화의 형식을 확인할 수 없습니다.")
+        text_fields = ("original", "input", "result", "conversation", "provider", "task", "detail", "status")
+        if not all(isinstance(state.get(key), str) for key in text_fields):
+            raise ValueError("복원할 대화에 잘못된 텍스트가 있습니다.")
+        for key in ("revisions", "results", "result_labels"):
+            if not isinstance(state.get(key), list) or not all(isinstance(v, str) for v in state[key]):
+                raise ValueError("복원할 대화 목록이 올바르지 않습니다.")
+        counts = state.get("result_revision_counts")
+        if not isinstance(counts, list) or not all(type(n) is int and 0 <= n <= len(state["revisions"]) for n in counts):
+            raise ValueError("복원할 결과의 조건 기록이 올바르지 않습니다.")
+        shown = state.get("shown_result")
+        if (len(counts) != len(state["results"]) or len(state["result_labels"]) != len(state["results"])
+                or type(shown) is not int or (shown != -1 and not 0 <= shown < len(counts))
+                or (counts and shown == -1) or type(state.get("history_open")) is not bool
+                or (state.get("notice") is not None and not isinstance(state["notice"], str))):
+            raise ValueError("복원할 결과 선택 상태가 올바르지 않습니다.")
+        for control, key in ((self.provider, "provider"), (self.task, "task"), (self.detail, "detail")):
+            if control.findData(state[key]) < 0:
+                raise ValueError("복원할 정리 설정을 현재 버전에서 찾을 수 없습니다.")
+
+        template = state.get("template")
+        if template is not None:
+            from optimizer_templates import filter_templates, load_templates
+            if (not isinstance(template, dict) or not isinstance(template.get("preview"), str)
+                    or not isinstance(template.get("search"), str) or not isinstance(template.get("category"), str)
+                    or type(template.get("office_only")) is not bool
+                    or (template.get("current_id") is not None and not isinstance(template["current_id"], str))
+                    or not isinstance(template.get("drafts"), dict)
+                    or not all(isinstance(k, str) and isinstance(v, str) for k, v in template["drafts"].items())):
+                raise ValueError("복원할 템플릿 초안의 형식이 올바르지 않습니다.")
+            catalog = load_templates()
+            ids = {item["id"] for item in catalog}
+            categories = {item["category"] for item in catalog}
+            if (not set(template["drafts"]) <= ids
+                    or (template["category"] and template["category"] not in categories)
+                    or (template["current_id"] is not None and template["current_id"] not in {
+                        item["id"] for item in filter_templates(catalog, template["search"], template["category"], template["office_only"])
+                    })):
+                raise ValueError("작성하던 템플릿을 현재 버전에서 찾을 수 없습니다.")
+
+        self.original = state["original"]
+        self.revisions = list(state["revisions"])
+        self.results = list(state["results"])
+        self._result_revision_counts = list(counts)
+        self.result_choice.blockSignals(True)
+        try:
+            self.result_choice.clear()
+            self.result_choice.addItems(state["result_labels"])
+            self.result_choice.setCurrentIndex(shown)
+        finally:
+            self.result_choice.blockSignals(False)
+        self._shown_result = shown
+        self.result.setPlainText(state["result"])
+        self.input.setPlainText(state["input"])
+        self.conversation.setPlainText(state["conversation"])
+        self.provider.setCurrentIndex(self.provider.findData(state["provider"]))
+        self.task.setCurrentIndex(self.task.findData(state["task"]))
+        self.detail.setCurrentIndex(self.detail.findData(state["detail"]))
+        self.history_toggle.setChecked(state["history_open"])
+        self.status.setText(state["status"])
+        if state["notice"] is not None:
+            self.inline_notice.setText(state["notice"])
+            self.inline_notice.show()
+        else:
+            self.inline_notice.hide()
+        self._update_input_example()
+
+        if template is not None:
+            self._insert_template()
+            picker = self._template_dialog
+            picker.office_button.setChecked(template["office_only"])
+            picker.category.setCurrentIndex(max(0, picker.category.findData(template["category"])))
+            picker.search.setText(template["search"])
+            picker._drafts = dict(template["drafts"])
+            if template["current_id"] is not None:
+                for row in range(picker.list.count()):
+                    item = picker.list.item(row)
+                    if item.data(Qt.ItemDataRole.UserRole)["id"] == template["current_id"]:
+                        picker.list.setCurrentRow(row)
+                        break
+            picker.preview.setPlainText(template["preview"])
+            picker._drafts = dict(template["drafts"])
+
     def set_sleep_paused(self, paused: bool):
         """Pause new requests without cancelling a request already in flight."""
         self._sleep_paused = bool(paused)

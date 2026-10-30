@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication
 
 import main
 import optimizer_chat
+import wardrobe
 from chat import ChatPanel
 from pet import PetWidget
 
@@ -46,6 +47,9 @@ def synthetic_vireonix_only(prompt, **kwargs):
 
 class AcceptancePet(PetWidget):
     def __init__(self, *args, **kwargs):
+        settings = QSettings(str(Path(test_dir) / "wardrobe.ini"), QSettings.Format.IniFormat)
+        settings.setFallbacksEnabled(False)
+        kwargs["wardrobe_settings"] = settings
         super().__init__(*args, **kwargs)
         self.setWindowTitle("Syeon Pet QA")
         # Expose this test-only pet to Windows UI Automation. Production uses
@@ -56,7 +60,9 @@ class AcceptancePet(PetWidget):
 
 class AcceptanceChat(ChatPanel):
     def __init__(self, *args, **kwargs):
-        kwargs["settings"] = QSettings(str(Path(test_dir) / "settings.ini"), QSettings.Format.IniFormat)
+        settings = QSettings(str(Path(test_dir) / "settings.ini"), QSettings.Format.IniFormat)
+        settings.setFallbacksEnabled(False)
+        kwargs["settings"] = settings
         super().__init__(*args, **kwargs)
         self.setWindowTitle("Syeon Acceptance QA")
         # Expose the test window to Windows UI automation; production keeps Tool.
@@ -70,7 +76,16 @@ class AcceptanceChat(ChatPanel):
 class NoNetworkUpdates(QObject):
     completed = Signal(object)
 
+    def __init__(self, *_args, **_kwargs):
+        super().__init__()
+
     def check(self, manual=False):
+        pass
+
+    def begin_shutdown(self):
+        pass
+
+    def cancel_shutdown(self):
         pass
 
 
@@ -86,7 +101,7 @@ if __name__ == "__main__":
     main.QApplication = AcceptanceApp
     main.ChatPanel = AcceptanceChat
     main.PetWidget = AcceptancePet
-    main.UpdateChecker = NoNetworkUpdates
+    main.UpdatePreparer = NoNetworkUpdates
     main.load_config = lambda: {
         "start_onboarding_on_launch": False,
         "ambient_chatter": False,
@@ -95,6 +110,11 @@ if __name__ == "__main__":
     allow_vireonix = sys.argv[1:] == ["--allow-vireonix"]
     sys.argv = [sys.argv[0]]
     with tempfile.TemporaryDirectory(prefix="syeon-acceptance-") as test_dir, ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ, {"APPDATA": str(Path(test_dir) / "appdata"),
+                                                    "LOCALAPPDATA": str(Path(test_dir) / "localappdata")}))
+        stack.enter_context(patch.object(wardrobe, "pack_root", return_value=Path(test_dir) / "packs"))
+        stack.enter_context(patch("pet.pack_root", return_value=Path(test_dir) / "packs"))
+        stack.enter_context(patch.object(QApplication, "clipboard", side_effect=blocked))
         stack.enter_context(patch.object(QProcess, "startDetached", side_effect=blocked))
         stack.enter_context(patch.object(subprocess, "Popen", side_effect=blocked))
         stack.enter_context(patch.object(optimizer_chat, "optimize_ai", side_effect=(
