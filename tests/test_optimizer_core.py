@@ -1,6 +1,12 @@
 import unittest
 
-from optimizer_core import create_offline_prompt, review_result, utf16_length
+import json
+import re
+from pathlib import Path
+
+from optimizer_core import (KEEP_MATERIAL_HEADING, KEEP_ORIGINAL_HEADING, _material,
+                            create_offline_prompt, keep_original_details, review_result,
+                            utf16_length)
 
 
 class OfflinePromptTests(unittest.TestCase):
@@ -88,9 +94,71 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(any("2문장" in w and "수량 범위 확인" in w for w in warnings))
         self.assertEqual(result, "안내문을 2문장 이내로 작성해 주세요.")
 
+    def test_long_warning_ignores_structured_prompts_but_flags_finished_documents(self):
+        structured = "가정통신문을 작성해 주세요.\n" + "- 형식: [항목]\n" * 25
+        self.assertLess(len(structured), 400)
+        self.assertFalse(any("많이 깁니다" in w for w in review_result("안내문 써줘", "", structured)))
+        finished = "학부모님 안녕하십니까. " * 60
+        self.assertTrue(any("많이 깁니다" in w for w in review_result("안내문 써줘", "", finished)))
+
     def test_extremely_long_number_does_not_break_review(self):
         long_count = "1" * 5000 + "개"
         self.assertTrue(review_result(long_count, "", long_count + " 이내"))
+
+
+class KeepOriginalDetailsTests(unittest.TestCase):
+    def test_strips_label_fence_and_wrapping_quotes(self):
+        for raw in ("```text\n안내문을 작성해 주세요.\n```",
+                    "**Prompt to send to an AI:**\n\n\"안내문을 작성해 주세요.\"",
+                    "“안내문을 작성해 주세요.”"):
+            with self.subTest(raw=raw):
+                self.assertEqual(keep_original_details("안내문 써줘", raw), ("안내문을 작성해 주세요.", []))
+        kept = "```python\nprint(1)\n```"
+        self.assertEqual(keep_original_details("```코드``` 설명해 줘", kept)[0], kept)
+        inner_quotes = '"재량휴업일"과 "등교일"을 구분해 주세요.'
+        self.assertEqual(keep_original_details("휴업일 안내", inner_quotes)[0], inner_quotes)
+
+    def test_lost_or_changed_literals_append_the_original_request(self):
+        cases = (("엑셀에서 학교 4개 합계", "엑셀에서 학교 3개 합계를 구해 주세요."),
+                 ('"재량휴업일" 안내문 써줘', "휴업일 안내문을 작성해 주세요."),
+                 ("세 문장으로 요약해 줘", "세 문장 이내로 요약해 주세요."))
+        for prompt, result in cases:
+            with self.subTest(prompt=prompt):
+                text, notes = keep_original_details(prompt, result)
+                self.assertEqual(text, f"{result}\n\n{KEEP_ORIGINAL_HEADING}\n{prompt}")
+                self.assertEqual(len(notes), 1)
+
+    def test_missing_material_is_appended_verbatim(self):
+        cases = (("다음 안내문을 영어로 번역해 주세요: 다음 주 화요일은 재량휴업일입니다.",
+                  "다음 주 화요일은 재량휴업일입니다."),
+                 ("아래 글을 쉬운 말로 바꿔 줘\n가상 안내문입니다.\n학부모 동의가 필요합니다.",
+                  "가상 안내문입니다.\n학부모 동의가 필요합니다."))
+        for prompt, material in cases:
+            with self.subTest(prompt=prompt[:20]):
+                text, notes = keep_original_details(prompt, "안내문을 바꿔 주세요.\n- 말투: 쉬운 말")
+                self.assertTrue(text.endswith(f"{KEEP_MATERIAL_HEADING}\n{material}"))
+                self.assertEqual(len(notes), 1)
+                kept = f"안내문을 바꿔 주세요.\n자료:\n{material}"
+                self.assertEqual(keep_original_details(prompt, kept), (kept, []))
+
+    def test_revisions_and_preserved_results_are_left_unchanged(self):
+        result = "학교 3개 합계를 구해 주세요."
+        self.assertEqual(keep_original_details("학교 4개 합계", result, check_details=False), (result, []))
+        kept = "학교 4개의 합계를 구하는 방법을 알려 주세요.\n- 형식: 단계별"
+        self.assertEqual(keep_original_details("학교 4개 합계 알려줘", kept), (kept, []))
+
+    def test_template_fields_are_never_treated_as_material(self):
+        root = Path(__file__).resolve().parents[1] / "assets"
+        texts = []
+        for name in ("prompt_templates.json", "seobu_office_templates.json"):
+            with (root / name).open(encoding="utf-8") as file:
+                texts.extend(item["text"] for item in json.load(file))
+        self.assertGreater(len(texts), 50)
+        for text in texts:
+            filled = re.sub(r"\[[^\]]*\]", "가상 내용", text)
+            with self.subTest(text=text[:30]):
+                self.assertEqual(_material(text), "")
+                self.assertEqual(_material(filled), "")
 
 
 if __name__ == "__main__":

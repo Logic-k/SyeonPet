@@ -184,7 +184,85 @@ def review_result(prompt: str, context: str, result: str) -> list[str]:
             and korean_out / (korean_out + latin_out) < 0.05
             and not explicit_english and not fenced and not re.match(r"^[\[{]", answer)):
         warnings.append("결과의 언어가 원문과 다를 수 있습니다. 직접 확인해 주세요.")
-    if utf16_length(result) > utf16_length(prompt) * 3 and utf16_length(result) > utf16_length(prompt) + 100:
-        warnings.append("결과가 원문보다 많이 깁니다. 불필요한 지시가 없는지 확인해 주세요.")
+    # A structured prompt for a one-line request is often a few hundred
+    # characters; only a much longer answer suggests a finished document.
+    if utf16_length(result) > utf16_length(prompt) * 3 and utf16_length(result) > utf16_length(prompt) + 600:
+        warnings.append("결과가 원문보다 많이 깁니다. 프롬프트 대신 완성된 글이 나오지 않았는지 확인해 주세요.")
     warnings.append("문자 그대로만 비교합니다. 표현이 바뀌면 누락으로 표시될 수 있으며 의도와 조건은 직접 확인해야 합니다.")
     return warnings
+
+
+_LABEL_LINE = re.compile(r"\A\s*\**\s*(?:prompt|프롬프트)[^\n:]{0,40}:\s*\**[ \t]*\n+", re.IGNORECASE)
+_WRAPPING_FENCE = re.compile(r"\A```[^\n`]*\n([\s\S]*?)\n```\Z")
+_REQUEST_END = re.compile(r"(?:주세요|줘|주십시오|하세요|해라|하라|바랍니다)\s*[.!]?\s*\Z")
+_MATERIAL_CUE = re.compile(r"아래|다음|밑의")
+_FIELD_LINE = re.compile(r"^\s*[^:\n\[\]]{1,25}:\s", re.MULTILINE)
+KEEP_ORIGINAL_HEADING = "원래 요청 (위 내용과 다르면 이 원문을 따르세요):"
+KEEP_MATERIAL_HEADING = "자료 (원문 그대로):"
+
+
+def _strip_wrapper(prompt: str, result: str) -> str:
+    """Remove a label line, an outer code fence or quotes around the whole answer."""
+    text = _LABEL_LINE.sub("", result.strip(), count=1).strip()
+    if "```" not in prompt:
+        fenced = _WRAPPING_FENCE.match(text)
+        if fenced:
+            text = fenced.group(1).strip()
+    for left, right in (('"', '"'), ("“", "”")):
+        inner = text[1:-1]
+        if (len(text) > 2 and text.startswith(left) and text.endswith(right)
+                and left not in inner and right not in inner):
+            text = inner.strip()
+    return text
+
+
+def _material(prompt: str) -> str:
+    """Return text the user supplied to be worked on, in two plain layouts only.
+
+    "번역해 주세요: <text>" on the first line, or a request line followed by
+    pasted text. Form-style lines ("항목: 값") and [placeholders], as used by
+    the templates, are conditions rather than material and are left alone.
+    """
+    lines = prompt.strip().splitlines()
+    if not lines:
+        return ""
+    first, rest = lines[0], "\n".join(lines[1:]).strip()
+    head, colon, tail = first.partition(":")
+    if colon and tail.strip() and _REQUEST_END.search(head):
+        return "\n".join(part for part in (tail.strip(), rest) if part)
+    if (rest and (first.rstrip().endswith(":") or (_MATERIAL_CUE.search(first) and _REQUEST_END.search(first)))
+            and not _FIELD_LINE.search(rest) and "[" not in rest):
+        return rest
+    return ""
+
+
+def _flat(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def keep_original_details(prompt: str, result: str, check_details: bool = True) -> tuple[str, list[str]]:
+    """Tidy an AI-written prompt and re-attach original wording it lost.
+
+    The AI is asked to keep numbers, quoted phrases and supplied material,
+    but this is enforced here: when a literal check finds a missing number or
+    quote, or a changed exact/upper/lower bound, the original request is
+    appended verbatim; when only the supplied material is missing, that
+    material is appended. Revisions may change values on purpose, so callers
+    pass check_details=False for them.
+    """
+    text = _strip_wrapper(prompt, result) or result.strip()
+    if not check_details:
+        return text, []
+    output_numbers = set(_numbers(text))
+    lost = (any(number not in output_numbers for number in _numbers(prompt))
+            or any(quote not in text for quote in _quotes(prompt))
+            or bool(_changed_quantity_bounds(prompt, text)))
+    if lost:
+        return (f"{text}\n\n{KEEP_ORIGINAL_HEADING}\n{prompt.strip()}",
+                ["AI 결과에서 빠지거나 바뀐 숫자·문구가 있어 원래 요청을 결과 끝에 원문 그대로 붙였어요."])
+    material = _material(prompt)
+    core = material.strip().strip('"“”')
+    if core and _flat(core) not in _flat(text):
+        return (f"{text}\n\n{KEEP_MATERIAL_HEADING}\n{material}",
+                ["AI 결과에 자료 원문이 그대로 없어 결과 끝에 붙였어요."])
+    return text, []

@@ -45,6 +45,7 @@ class AiOptimizerTests(unittest.TestCase):
         self.assertEqual(payload["model"], "auto")
         self.assertFalse(payload["stream"])
         data = json.loads(payload["messages"][1]["content"])
+        self.assertRegex(data.pop("request_id"), r"\A[0-9a-f]{16}\Z")
         self.assertEqual(data, {"task": "프로그래밍과 개발",
                                 "detail": "필요한 조건과 결과물의 구성을 상세히 설명합니다.",
                                 "original_request": "원문 30000원\n조건", "context": "맥락",
@@ -52,6 +53,38 @@ class AiOptimizerTests(unittest.TestCase):
         self.assertIn("원래 요청과 충돌하면 원래 요청을 우선", payload["messages"][0]["content"])
         self.assertIn("'세 문장 이내'로 바꾸거나", payload["messages"][0]["content"])
         conn.close.assert_called_once()
+
+    def test_each_request_gets_a_new_id_so_stored_replies_are_not_reused(self):
+        bodies = []
+        for _ in range(2):
+            remote = io.BytesIO(response("결과"))
+            remote.status = 200
+            conn = MagicMock()
+            conn.getresponse.return_value = remote
+            with patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                    patch.object(ai, "_PinnedHTTPSConnection", return_value=conn):
+                ai.optimize_ai("같은 합성 원문")
+            payload = json.loads(conn.request.call_args.kwargs["body"])
+            bodies.append(json.loads(payload["messages"][1]["content"]))
+        self.assertNotEqual(bodies[0]["request_id"], bodies[1]["request_id"])
+        self.assertEqual(bodies[0]["original_request"], bodies[1]["original_request"])
+
+    def test_first_rewrite_reattaches_lost_numbers_but_revision_does_not(self):
+        for revision, appended in (("", True), ("숫자는 빼 줘", False)):
+            remote = io.BytesIO(response("```text\n학교별 합계를 구하는 방법을 알려 주세요.\n- 학교: [학교 이름]\n```"))
+            remote.status = 200
+            conn = MagicMock()
+            conn.getresponse.return_value = remote
+            with self.subTest(revision=revision), \
+                    patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                    patch.object(ai, "_PinnedHTTPSConnection", return_value=conn):
+                reply = ai.optimize_ai("합성 요청: 학교 4개 합계", revision=revision,
+                                       previous_result="이전 결과" if revision else "")
+            self.assertTrue(reply["result"].startswith("학교별 합계를"))
+            self.assertNotIn("```", reply["result"])
+            self.assertEqual(reply["result"].endswith("\n합성 요청: 학교 4개 합계"), appended)
+            self.assertEqual(any("원문 그대로 붙였어요" in note for note in reply["notes"]), appended)
+            self.assertTrue(any("[대괄호]" in note for note in reply["notes"]))
 
     def test_validation_rejects_unknown_provider_and_utf16_length(self):
         for kwargs in ({"provider": "https://example.test"}, {"prompt": " "},
@@ -95,12 +128,12 @@ class AiOptimizerTests(unittest.TestCase):
 
     def test_http_failure_does_not_retry_and_never_contains_private_content(self):
         conn = MagicMock()
-        conn.getresponse.return_value.status = 429
+        conn.getresponse.return_value.status = 400
         with patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
                 patch.object(ai, "_PinnedHTTPSConnection", return_value=conn):
             with self.assertRaises(ai.OptimizationError) as raised:
                 ai.optimize_ai("private-data")
-        self.assertIn("429", str(raised.exception))
+        self.assertIn("400", str(raised.exception))
         self.assertNotIn("private-data", str(raised.exception))
         conn.request.assert_called_once()
 
@@ -113,16 +146,16 @@ class AiOptimizerTests(unittest.TestCase):
                 ai.optimize_ai("요청")
         conn.request.assert_called_once()
 
-    def test_temporary_retry_after_rules_match_existing_toolkit(self):
-        for status, header, expected in ((502, None, 1), (503, "0", 1),
-                                         (504, " 2 ", 2), (502, "3", 3),
-                                         (429, None, None), (500, "1", None),
-                                         (503, "4", None), (503, "-1", None),
-                                         (503, "1.5", None), (503, "", None),
-                                         (503, "9" * 5000, None),
-                                         (503, "Wed, 21 Oct 2026 07:28:00 GMT", None)):
-            with self.subTest(status=status, header=repr(header)[:30]):
-                self.assertEqual(ai._temporary_retry_delay(status, header), expected)
+    def test_temporary_retry_delay_backs_off_and_respects_short_retry_after(self):
+        for status, header, attempt, expected in (
+                (502, None, 0, 1), (502, None, 1, 2), (429, None, 0, 1), (429, None, 1, 2),
+                (503, "0", 0, 1), (504, " 2 ", 1, 2), (502, "3", 0, 3), (429, "3", 1, 3),
+                (500, "1", 0, None), (400, None, 0, None), (429, "4", 0, None),
+                (503, "4", 0, None), (503, "-1", 0, None), (503, "1.5", 0, None),
+                (503, "", 0, None), (503, "9" * 5000, 0, None),
+                (503, "Wed, 21 Oct 2026 07:28:00 GMT", 0, None)):
+            with self.subTest(status=status, header=repr(header)[:30], attempt=attempt):
+                self.assertEqual(ai._temporary_retry_delay(status, header, attempt), expected)
 
     def test_vireonix_retry_uses_identical_body_closes_and_waits_once(self):
         initial = MagicMock()
@@ -136,7 +169,7 @@ class AiOptimizerTests(unittest.TestCase):
         with patch.object(ai, "_resolve_public", return_value="8.8.8.8") as resolve, \
                 patch.object(ai, "_PinnedHTTPSConnection", side_effect=[first, second]) as factory, \
                 patch.object(ai.time, "sleep") as sleep:
-            result = ai.optimize_ai("합성 원문 3개", provider="vireonix")
+            result = ai.optimize_ai("합성 원문", provider="vireonix")
         self.assertEqual(result["result"], "재작성 결과")
         self.assertEqual(factory.call_count, 2)
         resolve.assert_called_once_with("vireonix.ai")
@@ -147,24 +180,51 @@ class AiOptimizerTests(unittest.TestCase):
         first.close.assert_called_once()
         second.close.assert_called_once()
 
-    def test_failed_second_attempt_does_not_retry_again(self):
+    def test_retries_stop_after_three_attempts_with_growing_waits(self):
+        for header, waits in ((None, [1, 2]), ("2", [2, 2])):
+            connections = [MagicMock() for _ in range(3)]
+            for connection in connections:
+                connection.getresponse.return_value.status = 503
+                connection.getresponse.return_value.getheader.return_value = header
+            with self.subTest(header=header), \
+                    patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                    patch.object(ai, "_PinnedHTTPSConnection", side_effect=connections) as factory, \
+                    patch.object(ai.time, "sleep") as sleep:
+                with self.assertRaisesRegex(ai.OptimizationError, "503"):
+                    ai.optimize_ai("합성 원문")
+            self.assertEqual(factory.call_count, 3)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], waits)
+            for connection in connections:
+                connection.request.assert_called_once()
+                connection.close.assert_called_once()
+
+    def test_vireonix_rate_limit_is_retried_and_explains_shared_limit(self):
+        limited = MagicMock()
+        limited.status = 429
+        limited.getheader.return_value = None
+        success = io.BytesIO(response("재작성 결과"))
+        success.status = 200
         first, second = MagicMock(), MagicMock()
-        for connection in (first, second):
-            connection.getresponse.return_value.status = 503
-            connection.getresponse.return_value.getheader.return_value = "2"
+        first.getresponse.return_value = limited
+        second.getresponse.return_value = success
         with patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
                 patch.object(ai, "_PinnedHTTPSConnection", side_effect=[first, second]), \
                 patch.object(ai.time, "sleep") as sleep:
-            with self.assertRaisesRegex(ai.OptimizationError, "503"):
+            self.assertEqual(ai.optimize_ai("합성 원문")["result"], "재작성 결과")
+        sleep.assert_called_once_with(1)
+        connections = [MagicMock() for _ in range(3)]
+        for connection in connections:
+            connection.getresponse.return_value.status = 429
+            connection.getresponse.return_value.getheader.return_value = None
+        with patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                patch.object(ai, "_PinnedHTTPSConnection", side_effect=connections), \
+                patch.object(ai.time, "sleep"):
+            with self.assertRaisesRegex(ai.OptimizationError, "함께 씁니다"):
                 ai.optimize_ai("합성 원문")
-        sleep.assert_called_once_with(2)
-        first.request.assert_called_once()
-        second.request.assert_called_once()
-        first.close.assert_called_once()
-        second.close.assert_called_once()
 
     def test_retry_is_not_used_for_other_responses_or_provider(self):
-        for provider, status, header in (("vireonix", 429, "1"),
+        for provider, status, header in (("vireonix", 429, "5"),
+                                          ("vireonix", 500, None),
                                           ("vireonix", 503, "4"),
                                           ("vireonix", 503, "nonsense"),
                                           ("pollinations-classic", 503, "1")):
