@@ -40,12 +40,14 @@ def hat(state,idx,name,framehash):
  im=Image.open(raw).convert('RGBA')
  leaf=data[state][idx]['leaf']['bbox']; left,top,right,bottom=leaf
  asset=Image.open(ROOT/'assets'/'wardrobe_presets'/(name+'_v2.png')).convert('RGBA')
- asset=asset.crop(asset.getbbox()); scale=min((right-left+1)*.98/asset.width,(right-left+1)*.62/asset.height)
+ # Seat the hat on the crown: wider than the leaf and low enough that the
+ # brim rests on the head, so only the leaf tip emerges above the hat.
+ asset=asset.crop(asset.getbbox()); scale=min((right-left+1)*1.15/asset.width,(bottom-top+1)*.80/asset.height)
  asset=asset.resize((max(1,round(asset.width*scale)),max(1,round(asset.height*scale))),Image.Resampling.LANCZOS)
  angle=anglemap.get(framehash,0)
  if isinstance(angle,dict): angle=angle.get('angle_degrees',0)
  asset=asset.rotate(-float(angle),resample=Image.Resampling.BICUBIC,expand=True)
- x=round((left+right-asset.width)/2); y=round(top-asset.height*.20)
+ x=round((left+right-asset.width)/2); y=round(bottom+asset.height*.12-asset.height)
  im.alpha_composite(asset,(max(0,x),max(0,y)))
  return im
 
