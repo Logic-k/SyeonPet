@@ -12,7 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QKeyEvent, QTextCursor
+from PySide6.QtGui import QKeyEvent, QPalette, QTextCursor
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from optimizer_chat import PromptConversation
@@ -70,6 +70,39 @@ class PromptConversationTests(unittest.TestCase):
             ai.assert_not_called()
             thread.assert_not_called()
             self.assertEqual(self.panel.input.toPlainText(), "가상의 업무 요청")
+
+    def test_placeholder_example_does_not_become_a_request(self):
+        example = self.panel.input.placeholderText()
+        self.assertIn("연수 안내문", example)
+        self.assertIn("[확인 필요]", example)
+        self.assertNotIn("\n", example)  # QTextEdit only paints one placeholder line.
+        self.assertEqual(self.panel.input.accessibleDescription(), example)
+        placeholder_color = self.panel.input.palette().color(QPalette.ColorRole.PlaceholderText)
+        self.assertEqual((placeholder_color.name(), placeholder_color.alpha()), ("#586d7a", 255))
+        self.assertEqual(self.panel.input.toPlainText(), "")
+        self.assertFalse(self.panel.has_pending_work())
+        with patch("optimizer_chat.optimize_ai") as ai:
+            self.panel.submit()
+            self.app.processEvents()
+            self.assertIn("입력해 주세요", self.panel.inline_notice.text())
+            self.assertFalse(hasattr(self.panel, "_confirmation"))
+            ai.assert_not_called()
+
+    def test_example_works_offline_and_tracks_conversation_state(self):
+        initial = self.panel.input.placeholderText()
+        example = initial.removeprefix("예: ").replace("\n", " ")
+        self._submit_offline(example)
+        self.assertEqual(self.panel.original, example)
+        self.assertIn(example, self.panel.result.toPlainText())
+        self.assertIn("[확인 필요]", self.panel.result.toPlainText())
+        self.assertIn("세 항목", self.panel.input.placeholderText())
+        self.panel.input.setPlainText("사용자가 작성 중인 추가 조건")
+        self.assertEqual(self.panel.input.toPlainText(), "사용자가 작성 중인 추가 조건")
+        self.panel._clear_request()
+        self.assertEqual(self.panel.input.placeholderText(), initial)
+        self.panel._apply_library({"prompt": example, "result": "저장된 결과"})
+        self.assertIn("세 항목", self.panel.input.placeholderText())
+        self.assertEqual(self.panel.result.toPlainText(), "저장된 결과")
 
     def test_compact_history_toggle_preserves_the_conversation_and_draft(self):
         self._submit_offline("회의 메모를 정리해 주세요")

@@ -12,6 +12,9 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
 from optimizer_core import TASKS, create_offline_prompt, review_result, validate_input
 from optimizer_ai import optimize_ai
 
+_FIRST_REQUEST_EXAMPLE = "예: 연수 안내문 작성, 날짜는 [확인 필요]"
+_FOLLOWUP_EXAMPLE = "예: 위 내용을 세 항목으로 나눠 주세요."
+
 
 class _ReplySignals(QObject):
     completed = Signal(object)
@@ -72,6 +75,7 @@ class PromptConversation(QWidget):
                 selection-background-color: #195b83; selection-color: #ffffff;
             }
             QWidget#promptConversation > QTextEdit:focus, QWidget#promptConversation > QComboBox:focus { border: 2px solid #195b83; padding: 3px; }
+            QWidget#promptConversation > QTextEdit#requestInput { placeholder-text-color: #586d7a; }
             QWidget#promptConversation > QTextEdit:disabled, QWidget#promptConversation > QComboBox:disabled { background: #e9eef2; color: #425a6a; }
             QWidget#promptConversation > QTextEdit#statusText { background: #eaf1f6; color: #172b3a; }
             QWidget#promptConversation > QTextEdit QScrollBar:vertical { background: #e5edf2; width: 11px; margin: 0; }
@@ -136,8 +140,9 @@ class PromptConversation(QWidget):
         self.detail.setCurrentIndex(1)
 
         self.input = QTextEdit()
+        self.input.setObjectName("requestInput")
         self.input.setAccessibleName("요청 또는 추가 조건")
-        self.input.setPlaceholderText("요청이나 추가 조건을 적어 주세요")
+        self._update_input_example()
         self.input.setMinimumHeight(65)
         self.input.setMaximumHeight(110)
         self.inline_notice = QLabel()
@@ -234,6 +239,11 @@ class PromptConversation(QWidget):
         layout.addWidget(self.result, 3)
         layout.addWidget(self.status)
 
+    def _update_input_example(self):
+        example = _FOLLOWUP_EXAMPLE if self.original else _FIRST_REQUEST_EXAMPLE
+        self.input.setPlaceholderText(example)
+        self.input.setAccessibleDescription(example)
+
     def _toggle_history(self, visible):
         self.conversation.setVisible(visible)
         self.conversation_label.setText("션과 대화" if visible else "션과 프롬프트 정리")
@@ -315,6 +325,7 @@ class PromptConversation(QWidget):
 
     def _apply_library(self, item):
         self.original = item.get("prompt", "")
+        self._update_input_example()
         self.task.setCurrentIndex(max(0, self.task.findData(item.get("task", "auto"))))
         self.detail.setCurrentIndex(max(0, self.detail.findData(item.get("detail", "balanced"))))
         self.revisions = list(item.get("syeonRevisions", []))
@@ -367,6 +378,7 @@ class PromptConversation(QWidget):
 
     def _clear_request(self):
         self.original = ""
+        self._update_input_example()
         self.revisions.clear()
         self.results.clear()
         self._result_revision_counts.clear()
@@ -530,6 +542,7 @@ class PromptConversation(QWidget):
             self._result_revision_counts.append(0)
             self.result_choice.addItem("직접 작성한 결과")
         self.original = original
+        self._update_input_example()
         if revision:
             self.revisions.append(revision)
         cursor = self.conversation.textCursor()
