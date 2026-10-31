@@ -82,6 +82,31 @@ class PetMotionTests(unittest.TestCase):
         self.assertEqual(self.pet._proc_fx(), (1.0, 1.0, 0.0, 0.0, 0.0))
         self.assertEqual(self.pet._blend_info(), (None, 0.0))
 
+    def test_reduced_motion_freezes_frames_and_preserves_render_preferences(self):
+        self.pet.motion_amp = 1.2
+        self.pet.crossfade = True
+        self.pet.time_scale = 1.7
+        self.pet._frame_elapsed = 90
+
+        self.pet.set_reduced_motion(True)
+        self.pet._advance_frame(10000)
+
+        self.assertEqual(self.pet.frame_idx, 0)
+        self.assertEqual(self.pet._proc_fx(), (1.0, 1.0, 0.0, 0.0, 0.0))
+        self.assertEqual(self.pet._blend_info(), (None, 0.0))
+        self.assertFalse(self.pet.tick.isActive())
+        self.assertEqual((self.pet.motion_amp, self.pet.crossfade, self.pet.time_scale),
+                         (1.2, True, 1.7))
+
+    def test_leaving_reduced_motion_resumes_frame_playback(self):
+        self.pet.set_reduced_motion(True)
+
+        self.pet.set_reduced_motion(False)
+        self.pet._advance_frame(150)
+
+        self.assertTrue(self.pet.tick.isActive())
+        self.assertEqual(self.pet.frame_idx, 1)
+
     def test_large_elapsed_time_is_bounded_and_keeps_phase(self):
         start = time.monotonic()
         self.pet._advance_frame(1_000_000_150)

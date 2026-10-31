@@ -58,16 +58,28 @@ class QtIntegrationSmokeTests(unittest.TestCase):
 
     def test_pet_actions_and_clicks(self):
         self.behavior.wander()
+        self.finish_bridge()
         self.assertEqual((self.behavior.mode, self.pet.state), ("walk", "walk"))
         self.behavior.sleep()
+        self.assertTrue(self.behavior.sleeping)
+        self.finish_bridge()
         self.assertEqual(self.behavior.mode, "sleep")
         self.mouse_event(QEvent.Type.MouseButtonPress, QPoint(150, 80))
         self.mouse_event(QEvent.Type.MouseButtonRelease, QPoint(150, 80))
+        self.finish_bridge()
         self.assertEqual(self.behavior.mode, "oneshot:idle")
         self.pet.double_clicked.emit()
+        self.finish_bridge()
         self.assertEqual(self.behavior.mode, "sleep")
         self.behavior.dance()
         self.assertEqual((self.behavior.mode, self.pet.state), ("dance", "dance"))
+
+    def finish_bridge(self):
+        if self.behavior.mode.startswith("transition:"):
+            self.assertIn(self.pet.state, ("sleep_bridge", "wake_bridge", "turn_bridge", "turn_front"))
+            self.pet._advance_frame(sum(self.pet._animation_meta()["durations"]) * self.pet.time_scale)
+            self.behavior._tick()
+            self.assertFalse(self.behavior.mode.startswith("transition:"))
 
     def test_drag_and_gravity_settle(self):
         self.mouse_event(QEvent.Type.MouseButtonPress, QPoint(150, 80))

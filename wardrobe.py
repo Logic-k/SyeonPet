@@ -7,10 +7,10 @@ from collections import OrderedDict
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QSettings, QSignalBlocker, QStandardPaths, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPolygonF, QTransform
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-                               QLabel, QPushButton, QRadioButton, QScrollArea, QSlider,
-                               QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPen, QPixmap, QPolygonF, QTransform
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+                               QHBoxLayout, QLabel, QPushButton, QRadioButton, QScrollArea,
+                               QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
 from wardrobe_presets import PRESETS, decorate_preset
 
@@ -29,6 +29,9 @@ _MOTION_NAMES = {
     "sleep": "앉아서 자기", "drag": "끌려가기", "celebrate": "기뻐하기",
     "jump": "점프하기", "dance": "춤추기", "liesleep": "누워 자기",
     "still": "엎드려 자기", "thinking": "고민하기",
+    "stretch": "기지개", "bow": "꾸벅 인사",
+    "sleep_bridge": "연결 · 눕기", "wake_bridge": "연결 · 일어나기",
+    "turn_bridge": "연결 · 옆으로 돌기", "turn_front": "연결 · 정면으로 돌기",
 }
 
 
@@ -173,33 +176,40 @@ class WardrobeWindow(QWidget):
         self.pet = pet
         self.setWindowTitle("션이 옷장")
         self.resize(410, 450)
-        self.setMinimumWidth(350)
+        self.setMinimumSize(350, 300)
         self.setStyleSheet("""
             QWidget { background: #fffdfa; color: #282532; font-family: 'Malgun Gothic'; font-size: 10pt; }
             QLabel#title { font-size: 17pt; font-weight: bold; }
             QLabel#hint { color: #514c5a; }
             QComboBox { background: #ffffff; color: #282532; border: 1px solid #777183; border-radius: 4px; padding: 4px 8px; min-height: 22px; }
-            QComboBox:focus { border: 2px solid #434a71; }
-            QRadioButton { padding: 8px 4px; }
+            QComboBox:focus { border: 2px solid #434a71; padding: 3px 7px; }
+            QRadioButton { padding: 4px; }
             QRadioButton::indicator { width: 15px; height: 15px; border: 2px solid #626075; border-radius: 9px; background: #fffdfa; }
-            QRadioButton::indicator:checked { border: 4px solid #434a71; background: #fffdfa; }
+            QRadioButton::indicator:checked { border: 2px solid #434a71; background: #434a71; }
             QCheckBox { spacing: 6px; }
             QCheckBox::indicator { width: 16px; height: 16px; border: 2px solid #626075; border-radius: 3px; background: #fffdfa; }
             QCheckBox::indicator:checked { border: 2px solid #434a71; background: #434a71; }
-            QPushButton { background: #434a71; color: white; border: 0; border-radius: 5px; padding: 8px 18px; }
+            QPushButton { background: #434a71; color: white; border: 0; border-radius: 5px; padding: 6px 10px; }
             QPushButton:hover { background: #303958; }
-            QPushButton:focus, QRadioButton:focus { outline: 2px solid #8a6acf; }
+            QPushButton:disabled { background: #777183; color: #ffffff; }
+            QPushButton:focus, QRadioButton:focus, QCheckBox:focus { outline: 2px solid #8a6acf; }
             QSlider::groove:horizontal { height: 5px; background: #777183; border-radius: 2px; }
             QSlider::handle:horizontal { width: 16px; height: 16px; margin: -6px 0; background: #434a71; border-radius: 8px; }
+            QSlider:focus::handle:horizontal { background: #8a6acf; }
         """)
         outer = QVBoxLayout(self)
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        outer.setContentsMargins(6, 6, 6, 6)
+        self.scroll = QScrollArea(self)
+        self.scroll.setAccessibleName("션 옷장 선택 영역")
+        self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         body = QWidget()
-        scroll.setWidget(body)
-        outer.addWidget(scroll)
+        self.scroll.setWidget(body)
+        outer.addWidget(self.scroll)
         layout = QVBoxLayout(body)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         title = QLabel("션이 옷장")
         title.setObjectName("title")
         layout.addWidget(title)
@@ -208,16 +218,24 @@ class WardrobeWindow(QWidget):
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        pack_line = QHBoxLayout()
-        pack_line.addWidget(QLabel("외형 팩"))
+        pack_form = QFormLayout()
+        pack_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        pack_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        pack_field = QWidget()
+        pack_line = QHBoxLayout(pack_field)
+        pack_line.setContentsMargins(0, 0, 0, 0)
         self.pack_combo = QComboBox()
         self.pack_combo.setAccessibleName("적용할 외형 팩")
         pack_line.addWidget(self.pack_combo, 1)
-        add_pack = QPushButton("가져오기")
-        add_pack.setToolTip("Sprite-Gen으로 완성한 로컬 팩 폴더를 가져옵니다.")
-        add_pack.clicked.connect(self._choose_pack_folder)
-        pack_line.addWidget(add_pack)
-        layout.addLayout(pack_line)
+        self.add_pack = QPushButton("가져오기")
+        self.add_pack.setAccessibleName("로컬 외형 팩 가져오기")
+        self.add_pack.setToolTip("Sprite-Gen으로 완성한 로컬 팩 폴더를 가져옵니다.")
+        self.add_pack.clicked.connect(self._choose_pack_folder)
+        pack_line.addWidget(self.add_pack)
+        pack_label = QLabel("외형 팩")
+        pack_label.setBuddy(self.pack_combo)
+        pack_form.addRow(pack_label, pack_field)
+        layout.addLayout(pack_form)
         self.pack_status = QLabel(pet.wardrobe_pack_error or "완성된 로컬 Sprite-Gen 팩을 가져올 수 있어요.")
         self.pack_status.setWordWrap(True)
         self.pack_status.setObjectName("hint")
@@ -225,7 +243,9 @@ class WardrobeWindow(QWidget):
         self._picker = None
         self._fill_packs()
         self.pack_combo.currentIndexChanged.connect(self._select_pack)
-        choice_line = QHBoxLayout()
+        choices = QFormLayout()
+        choices.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        choices.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         choice_label = QLabel("옷 빠른 선택")
         self.choice_combo = QComboBox()
         self.choice_combo.setAccessibleName("입힐 옷 빠른 선택")
@@ -233,17 +253,17 @@ class WardrobeWindow(QWidget):
         for key, (label, _description) in CHOICES.items():
             self.choice_combo.addItem(label, key)
         self.choice_combo.setCurrentIndex(max(0, self.choice_combo.findData(pet.wardrobe_choice)))
-        choice_line.addWidget(choice_label)
-        choice_line.addWidget(self.choice_combo, 1)
-        layout.addLayout(choice_line)
-        motion_line = QHBoxLayout()
+        choices.addRow(choice_label, self.choice_combo)
         motion_label = QLabel("움직임 미리보기")
         self.motion_combo = QComboBox()
         self.motion_combo.setAccessibleName("미리 볼 움직임")
         motion_label.setBuddy(self.motion_combo)
-        motion_line.addWidget(motion_label)
-        motion_line.addWidget(self.motion_combo, 1)
-        layout.addLayout(motion_line)
+        choices.addRow(motion_label, self.motion_combo)
+        layout.addLayout(choices)
+        for combo in (self.pack_combo, self.choice_combo, self.motion_combo):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(6)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setAccessibleName("선택한 꾸미기 미리보기")
@@ -254,6 +274,11 @@ class WardrobeWindow(QWidget):
         self.preview_play.setAccessibleName("움직임 미리보기 재생")
         self.preview_play.setAccessibleDescription("선택한 움직임을 반복해서 미리 봅니다.")
         self.preview_play.setToolTip("움직임을 반복해서 미리 봐요.")
+        # Reserve the longest label before the first layout, including native metrics.
+        self.preview_play.ensurePolished()
+        self.preview_play.setText("일시정지")
+        self.preview_play.setMinimumWidth(self.preview_play.sizeHint().width())
+        self.preview_play.setText("재생")
         self.preview_play.clicked.connect(self._toggle_preview)
         preview_line.addWidget(self.preview_play)
         self.preview_flip = QCheckBox("좌우 반전")
@@ -271,14 +296,15 @@ class WardrobeWindow(QWidget):
         self.preview_slider.setTracking(True)
         self.preview_slider.valueChanged.connect(self._refresh_preview)
         layout.addWidget(self.preview_slider)
-        repeat_hint = QLabel("미리보기는 반복 재생돼요.")
-        repeat_hint.setObjectName("hint")
-        repeat_hint.setWordWrap(True)
-        layout.addWidget(repeat_hint)
+        self.repeat_hint = QLabel("미리보기는 반복 재생돼요.")
+        self.repeat_hint.setObjectName("hint")
+        self.repeat_hint.setWordWrap(True)
+        layout.addWidget(self.repeat_hint)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._advance_preview)
         self._preview_playing = False
+        self._reduced_motion = False
         self._fill_motions()
         self.motion_combo.currentIndexChanged.connect(self._motion_changed)
         self.group = QButtonGroup(self)
@@ -287,6 +313,7 @@ class WardrobeWindow(QWidget):
         for name, (label, description) in CHOICES.items():
             row = QRadioButton(label)
             row.setToolTip(description)
+            row.setAccessibleName(label)
             row.setAccessibleDescription(description)
             row.setChecked(name == pet.wardrobe_choice)
             row.toggled.connect(lambda checked, key=name: self._select(key) if checked else None)
@@ -297,11 +324,45 @@ class WardrobeWindow(QWidget):
         layout.addStretch()
         footer = QHBoxLayout()
         footer.addStretch()
-        close = QPushButton("닫기")
-        close.clicked.connect(self.close)
-        footer.addWidget(close)
+        self.close_button = QPushButton("닫기")
+        self.close_button.setAccessibleName("션 옷장 닫기")
+        self.close_button.clicked.connect(self.close)
+        footer.addWidget(self.close_button)
         layout.addLayout(footer)
+        order = (self.pack_combo, self.add_pack, self.choice_combo, self.motion_combo,
+                 self.preview_play, self.preview_flip, self.preview_slider,
+                 *self.buttons.values(), self.close_button)
+        for previous, following in zip(order, order[1:]):
+            QWidget.setTabOrder(previous, following)
         self._refresh_preview()
+
+    def _fit_to_work_area(self):
+        geo = self.pet.sprite_rect_global()
+        screen = QGuiApplication.screenAt(geo.center()) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        self._fit_to_bounds(screen.availableGeometry())
+
+    def _fit_to_bounds(self, bounds):
+        """Account for native frame margins, including negative monitor origins."""
+        if bounds.isEmpty():
+            return
+        frame = self.frameGeometry()
+        extra_width = max(0, frame.width() - self.width())
+        extra_height = max(0, frame.height() - self.height())
+        available_width = max(1, bounds.width() - extra_width - 8)
+        available_height = max(1, bounds.height() - extra_height - 8)
+        self.setMinimumSize(min(350, available_width), min(300, available_height))
+        self.resize(min(self.width(), available_width), min(self.height(), available_height))
+        frame = self.frameGeometry()
+        self.move(max(bounds.left() + 4, min(frame.x(), bounds.right() + 1 - frame.width() - 4)),
+                  max(bounds.top() + 4, min(frame.y(), bounds.bottom() + 1 - frame.height() - 4)))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit_to_work_area()
+        QTimer.singleShot(0, self, self._fit_to_work_area)
+        self.pack_combo.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _select(self, choice):
         self.pet.set_wardrobe_choice(choice)
@@ -314,9 +375,12 @@ class WardrobeWindow(QWidget):
         if choice in self.buttons:
             self.buttons[choice].setChecked(True)
 
+    def _preview_meta(self):
+        source = self.pet.sprites.states.get(self.motion_combo.currentData()) or {}
+        return source.get("playback", source)
+
     def _refresh_preview(self):
-        state = self.motion_combo.currentData()
-        meta = self.pet.sprites.states.get(state)
+        meta = self._preview_meta()
         if not meta or not meta.get("frames"):
             self.preview.clear()
             self.preview_count.setText("0 / 0")
@@ -324,10 +388,15 @@ class WardrobeWindow(QWidget):
             return
         frames = meta["frames"]
         index = min(self.preview_slider.value(), len(frames) - 1)
-        frame = frames[index]
-        preview = decorate_frame(frame, self.pet.wardrobe_choice)
-        if self.preview_flip.isChecked():
-            preview = preview.transformed(QTransform().scale(-1, 1))
+        preview = self.pet._frame_pm(index, self.motion_combo.currentData(),
+                                     self.preview_flip.isChecked())
+        if offset := meta.get("render_offset_y", 0):
+            canvas = QPixmap(preview.size())
+            canvas.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(canvas)
+            painter.drawPixmap(0, offset, preview)
+            painter.end()
+            preview = canvas
         self.preview.setPixmap(preview.scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio,
                                               Qt.TransformationMode.SmoothTransformation))
         self.preview_count.setText(f"{index + 1} / {len(frames)}")
@@ -346,19 +415,22 @@ class WardrobeWindow(QWidget):
         self._motion_changed()
 
     def _motion_changed(self):
-        state = self.motion_combo.currentData()
-        meta = self.pet.sprites.states.get(state) or {}
+        meta = self._preview_meta()
         count = len(meta.get("frames", ()))
+        self.preview_count.setMinimumWidth(
+            self.preview_count.fontMetrics().horizontalAdvance(f"{count} / {count}"))
         with QSignalBlocker(self.preview_slider):
             self.preview_slider.setRange(0, max(0, count - 1))
             self.preview_slider.setValue(0)
         self.preview_slider.setEnabled(count > 1)
-        self.preview_play.setEnabled(count > 1)
+        self.preview_play.setEnabled(count > 1 and not self._reduced_motion)
         self._refresh_preview()
         if self._preview_playing:
             self._schedule_preview()
 
     def _toggle_preview(self):
+        if self._reduced_motion:
+            return
         self._preview_playing = not self._preview_playing
         self.preview_play.setText("일시정지" if self._preview_playing else "재생")
         self.preview_play.setAccessibleName("움직임 미리보기 일시정지" if self._preview_playing
@@ -369,7 +441,7 @@ class WardrobeWindow(QWidget):
             self._preview_timer.stop()
 
     def _schedule_preview(self):
-        meta = self.pet.sprites.states.get(self.motion_combo.currentData()) or {}
+        meta = self._preview_meta()
         durations = meta.get("durations") or []
         index = self.preview_slider.value()
         duration = durations[index % len(durations)] if durations else 150
@@ -386,6 +458,19 @@ class WardrobeWindow(QWidget):
         self._preview_playing = False
         self.preview_play.setText("재생")
         self.preview_play.setAccessibleName("움직임 미리보기 재생")
+
+    def set_reduced_motion(self, enabled: bool):
+        self._reduced_motion = enabled
+        if enabled:
+            self._stop_preview()
+        self.preview_play.setEnabled(self.preview_slider.maximum() > 0 and not enabled)
+        self.preview_play.setToolTip(
+            "동작 줄이기 적용 중 · 프레임을 직접 선택해 보세요."
+            if enabled else "움직임을 반복해서 미리 봐요.")
+        self.preview_play.setAccessibleDescription(
+            self.preview_play.toolTip() if enabled else "선택한 움직임을 반복해서 미리 봅니다.")
+        self.repeat_hint.setText(self.preview_play.toolTip() if enabled
+                                 else "미리보기는 반복 재생돼요.")
 
     def hideEvent(self, event):
         self._stop_preview()

@@ -1,7 +1,9 @@
 """Onboarding tour — the pet walks to anchor spots and narrates steps."""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QTimer
+import time
+
+from PySide6.QtCore import QObject, Qt, QTimer
 
 from behavior import BehaviorController
 from bubble import SpeechBubble
@@ -22,6 +24,8 @@ class OnboardingTour(QObject):
         self.steps = steps
         self.index = -1
         self._arrived = False
+        self._last_tick_time = time.monotonic()
+        self._movement_paused = False
 
         bubble.next_clicked.connect(self.next)
         bubble.prev_clicked.connect(self.prev)
@@ -29,6 +33,7 @@ class OnboardingTour(QObject):
 
         self._tick = QTimer(self)
         self._tick.setInterval(30)
+        self._tick.setTimerType(Qt.TimerType.PreciseTimer)
         self._tick.timeout.connect(self._update)
 
     @property
@@ -43,8 +48,18 @@ class OnboardingTour(QObject):
         self.behavior.onboarding_active = True
         self.index = 0
         self._arrived = False
-        self.pet.set_state("walk")
-        self._tick.start()
+        self._last_tick_time = time.monotonic()
+        self.behavior.reset_walk()
+        self._movement_paused = self.pet._dragging or self.behavior._fell
+        if not self._movement_paused:
+            if self.pet.reduced_motion:
+                self.behavior._set_pose("idle", "idle")
+            else:
+                self.pet.facing_left = self._anchor_x(self.steps[0]) < self.pet.x()
+                self.behavior._set_pose("walk", "walk", bridge="turn_bridge")
+                self.pet.play_transition("walk_start")
+        if not self.pet.reduced_motion:
+            self._tick.start()
         self.bubble.show_step(self._step_text(0), 0, len(self.steps), True)
         self.pet._relayout()
 
@@ -75,9 +90,25 @@ class OnboardingTour(QObject):
         self.bubble.hide()
         self.pet._relayout()
         self.behavior.onboarding_active = False
-        self.behavior.play_one_shot("celebrate", then="idle")
+        self.behavior.reset_walk()
+        if self.pet.reduced_motion:
+            self.behavior.idle()
+        elif not self.pet._dragging and not self.behavior._fell:
+            self.behavior.play_one_shot("celebrate", then="idle")
 
     # ---------- internals ----------
+
+    def refresh_motion_policy(self):
+        if not self.active:
+            return
+        self._arrived = False
+        self._last_tick_time = time.monotonic()
+        self.behavior.reset_walk()
+        if self.pet.reduced_motion:
+            self._tick.stop()
+            self.behavior._set_pose("idle", "idle")
+        else:
+            self._tick.start()
 
     def _step_text(self, i: int) -> str:
         s = self.steps[i]
@@ -98,15 +129,38 @@ class OnboardingTour(QObject):
     def _update(self):
         if not self.active:
             return
-        target = self._anchor_x(self.steps[self.index])
-        dx = target - self.pet.x()
-        step = self.behavior.WALK_SPEED * 0.03
-        if abs(dx) > step + 1 and not self._arrived:
-            self.pet.facing_left = dx < 0
-            self.pet.move(self.pet.x() + int(step * (1 if dx > 0 else -1)),
-                          self.pet.y())
-            self.pet.set_state("walk")
-        elif not self._arrived:
+        now = time.monotonic()
+        dt = max(0.0, min(now - self._last_tick_time, 0.05))
+        self._last_tick_time = now
+        if self.pet._dragging or self.behavior._fell:
+            self._movement_paused = True
+            self.behavior.reset_walk()
+            return
+        if self._movement_paused:
+            self._movement_paused = False
+            self._arrived = False
+            dt = 0.0
+        if self.pet.reduced_motion:
+            self._tick.stop()
+            self.behavior._set_pose("idle", "idle")
             self._arrived = True
-            self.pet.set_state("wave" if self.index == 0 else "idle")
+            self.pet._relayout()
+            return
+        if not self.behavior.advance_transition():
+            self.pet._relayout()
+            return
+        target = self._anchor_x(self.steps[self.index])
+        if not self._arrived:
+            if self.behavior.move_toward(target, dt):
+                self._arrived = True
+                state = "wave" if self.index == 0 else "idle"
+                mode = "oneshot:idle" if state == "wave" else "idle"
+                self.behavior._set_pose(mode, state, bridge="turn_front")
+                self.pet.play_transition("walk_stop")
+            elif self.pet.state != "walk" and not self.behavior.mode.startswith("transition:"):
+                self.pet.facing_left = target < self.pet.x()
+                self.behavior._set_pose("walk", "walk", bridge="turn_bridge")
+                self.pet.play_transition("walk_start")
+        elif self.pet.state == "wave" and self.pet.one_shot_finished():
+            self.behavior._set_pose("idle", "idle")
         self.pet._relayout()

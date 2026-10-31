@@ -6,7 +6,7 @@ setMask() includes its rect while visible.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -18,6 +18,7 @@ class SpeechBubble(QWidget):
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
+        self._generation = 0
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self.text = QLabel()
@@ -30,7 +31,7 @@ class SpeechBubble(QWidget):
         self.btn_skip = QPushButton("건너뛰기")
         for b in (self.btn_prev, self.btn_next, self.btn_skip):
             b.setStyleSheet(
-                "QPushButton { background: #f2e9dd; border: 1px solid #c9b8a3;"
+                "QPushButton { color: #2b2118; background: #f2e9dd; border: 1px solid #c9b8a3;"
                 " border-radius: 6px; padding: 3px 10px; font-size: 12px; }"
                 "QPushButton:hover { background: #fff6ea; }")
         self.btn_prev.setFixedWidth(34)
@@ -62,7 +63,15 @@ class SpeechBubble(QWidget):
         p.drawPath(path)
         p.end()
 
+    def hide(self):
+        self._generation += 1
+        super().hide()
+        parent = self.parentWidget()
+        if getattr(parent, "bubble_widget", None) is self:
+            parent._relayout()
+
     def show_step(self, text: str, index: int, total: int, interactive: bool):
+        self._generation += 1
         self.text.setText(text)
         self.btn_prev.setVisible(interactive and index > 0)
         self.btn_skip.setVisible(interactive)
@@ -70,6 +79,17 @@ class SpeechBubble(QWidget):
         self.btn_next.setVisible(interactive)
         self.adjustSize()
         self.show()
+
+    def show_temporary(self, text: str, milliseconds: int = 5000):
+        self.show_step(text, 0, 1, False)
+        self.parentWidget()._relayout()
+        self.parentWidget().raise_()
+        generation = self._generation
+        QTimer.singleShot(milliseconds, lambda: self._hide_temporary(generation))
+
+    def _hide_temporary(self, generation):
+        if generation == self._generation:
+            self.hide()
 
     def anchor_to(self, pet_widget):
         """Re-parent is done at construction; just trigger window relayout."""

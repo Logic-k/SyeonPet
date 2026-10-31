@@ -129,7 +129,7 @@ def run():
             chat = state["chat"]
             p = chat.prompt_conversation
             assert chat.isVisible() and p.isVisible() and not hasattr(chat, "tabs")
-            assert p.provider.currentData() == "vireonix"
+            assert p.provider.currentData() == "jarvisclaw"
             p.provider.setCurrentIndex(p.provider.findData("offline"))
             p.input.setPlainText(prompt_draft)
             p.result.setPlainText(result_draft)

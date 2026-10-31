@@ -72,7 +72,7 @@ def run():
              patch.object(socket, "create_connection", side_effect=blocked), \
              patch.object(QApplication, "clipboard", side_effect=blocked), \
              patch("optimizer_chat.optimize_ai", side_effect=blocked):
-            assert prompt.provider.currentData() == "vireonix"
+            assert prompt.provider.currentData() == "jarvisclaw"
             assert prompt.input.toPlainText() == ""
             first = prompt.input.placeholderText()
             assert "예" in first and len(first) > 10

@@ -64,6 +64,24 @@ class OfficeTemplateTests(unittest.TestCase):
                 matches = filter_templates(catalog, query, office_only=True)
                 self.assertIn(expected, [item["id"] for item in matches])
 
+    def test_foundational_learning_activity_is_searchable_and_can_be_edited(self):
+        matches = filter_templates(load_templates(), "기초학력", office_only=True)
+        self.assertEqual([item["id"] for item in matches],
+                         ["seobu-foundational-learning-activity"])
+        chosen = []
+        dialog = show_template_picker(on_selected=chosen.append)
+        dialog.office_button.click()
+        dialog.search.setText("기초학력")
+        self.assertEqual(dialog.list.count(), 1)
+        dialog.list.setCurrentRow(0)
+        text = dialog.preview.toPlainText()
+        self.assertIn("[내용]", text)
+        self.assertIn("교사가 검토", text)
+        dialog.preview.setPlainText(text.replace("[내용]", "가상의 학습 목표", 1))
+        dialog.select_button.click()
+        self.assertEqual(len(chosen), 1)
+        self.assertIn("가상의 학습 목표", chosen[0])
+
     def test_office_data_unavailable_keeps_original_catalog_and_shows_warning(self):
         read = templates_module._read_catalog
         def read_or_fail(filename):

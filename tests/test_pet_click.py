@@ -94,6 +94,11 @@ class PetClickTests(unittest.TestCase):
     def test_double_click_still_runs_configured_action(self):
         self.behavior.idle()
         self.event(QEvent.Type.MouseButtonDblClick, (0, 0), 100.0)
+        self.assertTrue(self.behavior.sleeping)
+        if self.pet.sprites.has("sleep_bridge"):
+            self.assertEqual(self.pet.state, "sleep_bridge")
+            self.pet._advance_frame(sum(self.pet._animation_meta()["durations"]))
+            self.behavior._tick()
         self.assertEqual(self.behavior.mode, "sleep")
 
     def tick_until_landed(self):

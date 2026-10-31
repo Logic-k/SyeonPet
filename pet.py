@@ -42,6 +42,53 @@ class SpriteBank:
                 "loop": bool(meta.get("loop", True)),
             }
         self._load_optional_thinking(assets)
+        for state in ("stretch", "bow"):
+            self._load_optional_row(assets / "extra_motions" / state, state, loop=False)
+        self._load_motion_bridges(assets)
+        if assets.resolve() == ASSETS.resolve():
+            self._apply_packaged_playback()
+
+    def _load_motion_bridges(self, assets: Path) -> None:
+        for state, reverse in (("sleep_bridge", "wake_bridge"),
+                               ("turn_bridge", "turn_front")):
+            self._load_optional_row(assets / "motion_bridges" / state, state, loop=False)
+            if state in self.states:
+                source = self.states[state]
+                self.states[reverse] = {
+                    "frames": list(reversed(source["frames"])),
+                    "durations": list(reversed(source["durations"])),
+                    "loop": False,
+                }
+
+    def _apply_packaged_playback(self) -> None:
+        """Reuse source poses for recovery while preserving source asset identity."""
+        if "thinking" in self.states:
+            # The separate original row has its soles 11 source pixels above
+            # the main sheet. Apply this after costume decoration, at render.
+            self.states["thinking"]["render_offset_y"] = 11
+        for state, scale in (("liesleep", .82), ("still", .90)):
+            if state in self.states:
+                self.states[state]["render_scale"] = scale
+                self.states[state]["render_anchor"] = (128, 245)
+        for state, sequence in (("sleep", (0, 1, 2, 3, 2, 1)),
+                                ("liesleep", (0, 2, 4, 5, 3, 1)),
+                                ("stretch", (0, 1, 2, 3, 2, 4, 5)),
+                                ("bow", (0, 1, 2, 3, 2, 4, 5))):
+            meta = self.states.get(state)
+            if meta is None or len(meta["frames"]) != (4 if state == "sleep" else 6):
+                continue
+            durations = [meta["durations"][i % len(meta["durations"])] for i in sequence]
+            if state == "liesleep":
+                durations = [300, 300, 450, 300, 300, 450]
+            elif state != "sleep":
+                durations[4] = 140
+            meta["playback"] = {
+                "frames": [meta["frames"][i] for i in sequence],
+                "durations": durations,
+                "loop": meta["loop"],
+                "source_indices": sequence,
+                **{key: meta[key] for key in ("render_scale", "render_anchor") if key in meta},
+            }
 
     def _load_optional_thinking(self, assets: Path) -> None:
         """Load the separate Sprite-Gen row without changing the original atlas.
@@ -50,17 +97,20 @@ class SpriteBank:
         leaves thinking unavailable and the behavior controller falls back to
         idle. Manifest filenames are never interpreted as paths.
         """
-        folder = assets / "thinking"
+        self._load_optional_row(assets / "thinking", "thinking", loop=True)
+
+    def _load_optional_row(self, folder: Path, state: str, *, loop: bool) -> None:
+        """Accept a complete six-frame row, or keep the original bank usable."""
         try:
             manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
             sheet = QPixmap(str(folder / "sprite-sheet-alpha.png"))
             if sheet.isNull():
                 return
-            layout = manifest["frame_layout"]["rows"]["thinking"]
-            meta = manifest["animation"]["rows"]["thinking"]
+            layout = manifest["frame_layout"]["rows"][state]
+            meta = manifest["animation"]["rows"][state]
             durations = meta["durations_ms"]
             if (not isinstance(layout, list) or len(layout) != 6
-                    or meta.get("frames") != 6 or meta.get("loop") is not True
+                    or meta.get("frames") != 6 or meta.get("loop") is not loop
                     or not isinstance(durations, list) or len(durations) != 6
                     or any(type(d) is not int or d <= 0 or d > 10000 for d in durations)):
                 return
@@ -80,8 +130,8 @@ class SpriteBank:
                 if frame.isNull() or QRegion(frame.mask()).isEmpty():
                     return
                 frames.append(frame)
-            self.states["thinking"] = {"frames": frames,
-                                       "durations": list(durations), "loop": True}
+            self.states[state] = {"frames": frames,
+                                  "durations": list(durations), "loop": loop}
         except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError):
             return
 
@@ -101,6 +151,7 @@ class PetWidget(QWidget):
     BOUNCE = 0.32          # restitution on landing
     GROUND_FRICTION = 0.80
     MAX_PHYSICS_STEP = 0.05  # avoid jumping across the screen after a stalled timer
+    MAX_ANIMATION_STEP_MS = 50.0
     MAX_THROW_SPEED = 1800.0
 
     def __init__(self, sprites: SpriteBank, display_size: int = 168, wardrobe_settings=None):
@@ -126,11 +177,19 @@ class PetWidget(QWidget):
         self._facing_left = False
         self.vx = 0.0
         self.vy = 0.0
+        self._physics_position: QPointF | None = None
+        self._physics_anchor: QPoint | None = None
+        self._physics_grounded = False
         self._frame_elapsed = 0.0
+        self._completed_cycles = 0
+        self._transition_kind: str | None = None
+        self._transition_elapsed = 0.0
+        self._transition_duration = 180.0
         self.time_scale = 1.0  # >1 slows sprite animation playback
         self.crossfade = False  # blend adjacent frames (off: ghosting)
         self.BLEND_MS = 40
         self.motion_amp = 0.8  # procedural squash/bob/tilt amplitude
+        self.reduced_motion = False
         self._last_tick = time.monotonic()
         self._drag_offset = QPoint(0, 0)
         self._dragging = False
@@ -182,11 +241,28 @@ class PetWidget(QWidget):
         self._update_mask()
         self.update()
 
-    def _frame_pm(self, idx: int) -> QPixmap:
-        meta = self.sprites.states[self.state]
+    def _frame_pm(self, idx: int, state: str | None = None,
+                  facing_left: bool | None = None) -> QPixmap:
+        meta = self._animation_meta(state)
         pm = meta["frames"][idx % len(meta["frames"])]
         pm = decorate_frame(pm, self.wardrobe_choice)
-        if self.facing_left:
+        scale = meta.get("render_scale", 1.0)
+        if scale != 1.0:
+            # Keep the original canvas and floor reference. Costumes must be
+            # applied first so every part of the pose receives the same scale.
+            canvas = QPixmap(pm.size())
+            canvas.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(canvas)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            anchor_x, anchor_y = meta["render_anchor"]
+            painter.translate(anchor_x, anchor_y)
+            painter.scale(scale, scale)
+            painter.translate(-anchor_x, -anchor_y)
+            painter.drawPixmap(0, 0, pm)
+            painter.end()
+            pm = canvas
+        flip = self.facing_left if facing_left is None else facing_left
+        if flip:
             pm = pm.transformed(QTransform().scale(-1, 1))
         return pm
 
@@ -214,6 +290,7 @@ class PetWidget(QWidget):
         """Validate and load before switching; failure retains the old bank."""
         sprites = self._original_sprites if name == "original" else self._load_wardrobe_pack(name)
         write_pack_choice(name, self._wardrobe_settings)
+        interrupted_one_shot = not self._animation_meta()["loop"]
         self.sprites = sprites
         self.wardrobe_pack = name
         self.wardrobe_pack_error = ""
@@ -221,28 +298,41 @@ class PetWidget(QWidget):
             self.state = "idle"
             self.frame_idx = 0
             self._frame_elapsed = 0.0
+            self._completed_cycles = 0
+            # The controller must be able to finish a gesture that this pack
+            # does not contain, rather than waiting forever on looping idle.
+            self._one_shot_done = interrupted_one_shot
         else:
-            self.frame_idx = min(self.frame_idx, len(self.sprites.states[self.state]["frames"]) - 1)
+            self.frame_idx = min(self.frame_idx, len(self._animation_meta()["frames"]) - 1)
+        # The replacement pack may give this pose a shorter duration. Render
+        # it once before advancing instead of carrying the old timing debt.
+        self._frame_elapsed = 0.0
         self._pm_cache.clear()
         self._mask_cache.clear()
         self._mask_blend_next = None
         self._update_mask()
+        self._last_tick = time.monotonic()
         self.update()
 
     def _current_pm(self) -> QPixmap:
         """The frame about to be drawn, with facing applied — mask and paint
         must derive from this same pixmap or the mask clips the sprite."""
-        meta = self.sprites.states[self.state]
+        meta = self._animation_meta()
         return self._frame_pm(min(self.frame_idx, len(meta["frames"]) - 1))
+
+    def _animation_meta(self, state: str | None = None) -> dict:
+        """Playback may revisit source poses without copying or editing them."""
+        meta = self.sprites.states[self.state if state is None else state]
+        return meta.get("playback", meta)
 
     def _blend_info(self):
         """(next_frame_idx, blend_t 0..1) while fading into the next frame."""
-        meta = self.sprites.states[self.state]
+        meta = self._animation_meta()
         n = len(meta["frames"])
         idx = min(self.frame_idx, n - 1)
         dur = meta["durations"][idx % len(meta["durations"])] * self.time_scale
         nxt = ((idx + 1) % n) if meta["loop"] else (idx + 1 if idx + 1 < n else None)
-        if self.state == "still" or nxt is None or dur <= 0 or self.BLEND_MS <= 0:
+        if self.reduced_motion or self.state == "still" or nxt is None or dur <= 0 or self.BLEND_MS <= 0:
             return None, 0.0
         blend = min(self.BLEND_MS, dur * 0.35)
         t = (self._frame_elapsed - (dur - blend)) / blend
@@ -260,18 +350,24 @@ class PetWidget(QWidget):
         return pm
 
     def _cur_scaled_pm(self) -> QPixmap:
-        meta = self.sprites.states[self.state]
+        meta = self._animation_meta()
         return self._scaled_pm(min(self.frame_idx, len(meta["frames"]) - 1))
+
+    def _render_offset_y(self, scaled: QPixmap) -> int:
+        meta = self._animation_meta()
+        source = meta["frames"][min(self.frame_idx, len(meta["frames"]) - 1)]
+        return round(meta.get("render_offset_y", 0) * scaled.height() / source.height())
 
     def _sprite_draw_rect(self) -> tuple[int, int, int, int]:
         """Where the scaled frame lands inside this window (bottom-center)."""
         scaled = self._cur_scaled_pm()
         x = (self.win_width - scaled.width()) // 2
-        y = self.height() - scaled.height()
+        y = self.height() - scaled.height() + self._render_offset_y(scaled)
         return x, y, scaled.width(), scaled.height()
 
     def _mask_region(self, idx: int) -> QRegion:
-        amplitude = min(max(self.motion_amp, 0.0), 2.0) if math.isfinite(self.motion_amp) else 0.0
+        amplitude = (min(max(self.motion_amp, 0.0), 2.0)
+                     if not self.reduced_motion and math.isfinite(self.motion_amp) else 0.0)
         if self.state == "walk":
             padding = math.ceil(1.2 * self.display_size * math.sin(math.radians(1.4 * amplitude)) + 2.5 * amplitude + 1) if amplitude else 0
         elif self.state == "dance":
@@ -280,6 +376,8 @@ class PetWidget(QWidget):
             padding = math.ceil(.012 * self.display_size * amplitude + 1) if amplitude else 0
         else:
             padding = 0
+        if self._transition_kind is not None and amplitude:
+            padding += math.ceil(.06 * self.display_size * amplitude + 2)
         key = (self.state, idx, self.facing_left, padding)
         region = self._mask_cache.get(key)
         if region is None:
@@ -303,7 +401,7 @@ class PetWidget(QWidget):
 
     def _update_mask(self):
         """OS-level hit region: the sprite's opaque pixels + bubble rect."""
-        meta = self.sprites.states[self.state]
+        meta = self._animation_meta()
         idx = min(self.frame_idx, len(meta["frames"]) - 1)
         scaled = self._cur_scaled_pm()
         region = self._mask_region(idx)
@@ -318,15 +416,15 @@ class PetWidget(QWidget):
                                   scaled.height() - next_scaled.height())
             region |= next_region
         x = (self.win_width - scaled.width()) // 2
-        y = self.height() - scaled.height()
+        y = self.height() - scaled.height() + self._render_offset_y(scaled)
         region.translate(x, y)
         if self.bubble_widget is not None and self.bubble_widget.isVisible():
             region |= QRegion(self.bubble_widget.geometry())
         self.setMask(region)
 
     def _relayout(self):
-        """Grow the window upward when the bubble opens; feet stay on the ground."""
-        floor = self.ground_y()
+        """Grow above the feet without moving a dragged or airborne pet."""
+        floor = self.y() + self.height()
         extra = self.bubble_widget.height() + 4 if (
             self.bubble_widget is not None and self.bubble_widget.isVisible()) else 0
         new_h = self.base_height + extra
@@ -339,11 +437,39 @@ class PetWidget(QWidget):
 
     # ---------- animation ----------
 
+    def set_reduced_motion(self, enabled: bool) -> None:
+        """Pause decorative rendering without changing pose ownership or preferences."""
+        if enabled == self.reduced_motion:
+            return
+        self.reduced_motion = enabled
+        self._last_tick = time.monotonic()
+        if enabled:
+            self.tick.stop()
+            self.frame_idx = 0
+            self._frame_elapsed = 0.0
+            self._transition_kind = None
+        else:
+            self.tick.start()
+        self._update_mask()
+        self.update()
+
     def _on_tick(self):
         now = time.monotonic()
         dt_ms = (now - self._last_tick) * 1000.0
         self._last_tick = now
-        self._advance_frame(dt_ms)
+        # Present every pose after a busy GUI interval instead of consuming an
+        # entire gesture before it can paint. Offline/deterministic advancement
+        # still accepts arbitrary elapsed time through _advance_frame.
+        durations = self._animation_meta()["durations"]
+        max_step = min(self.MAX_ANIMATION_STEP_MS, min(durations) * self.time_scale)
+        presented_ms = min(dt_ms, max_step)
+        self._advance_frame(presented_ms)
+        if self._transition_kind is not None:
+            self._transition_elapsed += max(0.0, presented_ms)
+            if self._transition_elapsed >= self._transition_duration:
+                self._transition_kind = None
+                self._update_mask()
+            self.update()
         nxt, t = self._blend_info() if self.crossfade else (None, 0.0)
         blend_next = nxt if t > 0 else None
         if blend_next != self._mask_blend_next:
@@ -357,12 +483,28 @@ class PetWidget(QWidget):
         self.state = state
         self.frame_idx = 0
         self._frame_elapsed = 0.0
+        self._completed_cycles = 0
         self._one_shot_done = False
+        self._update_mask()
+        # Mask/costume preparation may itself be expensive on first use. None
+        # of that time belongs to the newly entered animation.
+        self._last_tick = time.monotonic()
+        self.update()
+
+    def play_transition(self, kind: str, duration_ms: float = 180.0) -> None:
+        """Add a short grounded settle without replacing the current sprite pose."""
+        if (kind not in ("landing", "walk_start", "walk_stop")
+                or self.reduced_motion or not math.isfinite(duration_ms) or duration_ms <= 0
+                or not math.isfinite(self.motion_amp) or self.motion_amp <= 0):
+            return
+        self._transition_kind = kind
+        self._transition_elapsed = 0.0
+        self._transition_duration = duration_ms
         self._update_mask()
         self.update()
 
     def _cycle_phase(self) -> float:
-        meta = self.sprites.states[self.state]
+        meta = self._animation_meta()
         total = sum(meta["durations"]) * self.time_scale
         if total <= 0:
             return 0.0
@@ -373,7 +515,7 @@ class PetWidget(QWidget):
     def _proc_fx(self):
         """Continuous transform for a lively feel: (sx, sy, rot_deg, dx, dy)."""
         a = self.motion_amp
-        if not math.isfinite(a) or a <= 0 or self.state == "still":
+        if self.reduced_motion or not math.isfinite(a) or a <= 0 or self.state == "still":
             return 1.0, 1.0, 0.0, 0.0, 0.0
         a = min(a, 2.0)
         st = self.state
@@ -381,37 +523,59 @@ class PetWidget(QWidget):
         if st == "walk":
             bob = abs(math.sin(ph * 2 * math.pi * 2))
             tilt = math.sin(ph * 2 * math.pi * 2) * 1.4 * a
-            return 1.0, 1.0, tilt, 0.0, -2.5 * bob * a
-        if st == "dance":
-            return 1.0, 1.0, math.sin(ph * 2 * math.pi) * 3.0 * a, 0.0, 0.0
-        if st in ("idle", "sleep", "liesleep", "drag"):
+            result = (1.0, 1.0, tilt, 0.0, -2.5 * bob * a)
+        elif st == "dance":
+            result = (1.0, 1.0, math.sin(ph * 2 * math.pi) * 3.0 * a, 0.0, 0.0)
+        elif st in ("idle", "sleep", "liesleep", "drag"):
             b = math.sin(time.monotonic() * 2.0) * a
-            return 1.0 + 0.008 * b, 1.0 + 0.012 * b, 0.0, 0.0, 0.0
-        return 1.0, 1.0, 0.0, 0.0, 0.0
+            result = (1.0 + 0.008 * b, 1.0 + 0.012 * b, 0.0, 0.0, 0.0)
+        else:
+            result = (1.0, 1.0, 0.0, 0.0, 0.0)
+        if self._transition_kind is None:
+            return result
+        phase = min(1.0, self._transition_elapsed / self._transition_duration)
+        envelope = math.sin(math.pi * phase) ** 2 * a
+        sx, sy, rot, dx, dy = result
+        facing = -1 if self.facing_left else 1
+        if self._transition_kind == "landing":
+            sx += .035 * envelope
+            sy -= .045 * envelope
+        elif self._transition_kind == "walk_start":
+            sx -= .012 * envelope
+            sy += .018 * envelope
+            rot += 1.2 * facing * envelope
+        else:
+            sx += .012 * envelope
+            sy -= .018 * envelope
+            rot -= .8 * facing * envelope
+        return sx, sy, rot, dx, dy
 
     def _advance_frame(self, dt_ms: float):
-        if (self.state == "still" or not math.isfinite(dt_ms) or dt_ms <= 0
+        if (self.reduced_motion or self.state == "still" or not math.isfinite(dt_ms) or dt_ms <= 0
                 or not math.isfinite(self.time_scale) or self.time_scale <= 0):
             return
-        meta = self.sprites.states[self.state]
+        meta = self._animation_meta()
         if self._one_shot_done and not meta["loop"]:
             return
         self._frame_elapsed += dt_ms
         durations = meta["durations"]
         if meta["loop"]:
             cycle = sum(durations[i % len(durations)] for i in range(len(meta["frames"]))) * self.time_scale
-            if cycle > 0 and self._frame_elapsed >= cycle:
-                self._frame_elapsed %= cycle
+            if cycle > 0 and self._frame_elapsed + 1e-7 >= cycle:
+                cycles = int((self._frame_elapsed + 1e-7) // cycle)
+                self._completed_cycles += cycles
+                self._frame_elapsed = max(0.0, self._frame_elapsed - cycles * cycle)
         changed = False
-        while self._frame_elapsed >= \
+        while self._frame_elapsed + 1e-7 >= \
                 durations[self.frame_idx % len(durations)] * self.time_scale:
-            self._frame_elapsed -= \
-                durations[self.frame_idx % len(durations)] * self.time_scale
+            self._frame_elapsed = max(0.0, self._frame_elapsed -
+                                      durations[self.frame_idx % len(durations)] * self.time_scale)
             self.frame_idx += 1
             changed = True
             if self.frame_idx >= len(meta["frames"]):
                 if meta["loop"]:
                     self.frame_idx = 0
+                    self._completed_cycles += 1
                 else:
                     self.frame_idx = len(meta["frames"]) - 1
                     self._frame_elapsed = 0.0
@@ -452,28 +616,65 @@ class PetWidget(QWidget):
         if not math.isfinite(dt) or dt <= 0:
             return False
         dt = min(dt, self.MAX_PHYSICS_STEP)
-        self.vy += self.GRAVITY * dt
-        pos = self.pos() + QPointF(self.vx * dt, self.vy * dt).toPoint()
         floor = self.ground_y() - self.height()
+        # QWidget coordinates are integral. Keep the fractional displacement
+        # between ticks, but resync when dragging, layout or another controller
+        # has moved the window since the last physics tick.
+        if self._physics_position is None or self.pos() != self._physics_anchor:
+            self._physics_position = QPointF(self.pos())
+            if self.y() < floor or self.vy != 0:
+                self._physics_grounded = False
+        pos = QPointF(self._physics_position)
         bounds = self.screen_bounds()
         landed = False
-        if pos.y() >= floor:
+        pos.setY(min(pos.y(), floor))
+        flight_y = pos.y() + self.vy * dt + 0.5 * self.GRAVITY * dt * dt
+        if flight_y < floor:
+            self._physics_grounded = False
+            pos += QPointF(self.vx * dt, self.vy * dt + 0.5 * self.GRAVITY * dt * dt)
+            self.vy += self.GRAVITY * dt
+        else:
+            # Resolve the impact within this tick, so its timing and remaining
+            # slide are the same at 30, 60 and 120 Hz.
+            impact_time = (-self.vy + math.sqrt(self.vy * self.vy
+                           + 2 * self.GRAVITY * (floor - pos.y()))) / self.GRAVITY
+            impact_time = max(0.0, min(dt, impact_time))
+            pos.setX(pos.x() + self.vx * impact_time)
             pos.setY(floor)
-            if abs(self.vy) > 240:
+            self.vy += self.GRAVITY * impact_time
+            remaining = dt - impact_time
+            if self.vy > 240:
+                self._physics_grounded = False
                 self.vy = -self.vy * self.BOUNCE
                 self.vx *= 0.7
+                pos += QPointF(self.vx * remaining,
+                               self.vy * remaining + 0.5 * self.GRAVITY * remaining * remaining)
+                self.vy += self.GRAVITY * remaining
             else:
+                if not self._physics_grounded:
+                    self.play_transition("landing")
+                self._physics_grounded = True
                 self.vy = 0.0
-                self.vx *= self.GROUND_FRICTION
+                # GROUND_FRICTION retains its original 60 Hz meaning. The
+                # exponential and its integral avoid per-callback braking.
+                friction = -60.0 * math.log(self.GROUND_FRICTION)
+                decay = math.exp(-friction * remaining)
+                pos.setX(pos.x() + self.vx * (1.0 - decay) / friction)
+                self.vx *= decay
                 landed = abs(self.vx) < 12
         pos.setX(max(bounds.left() - 20, min(pos.x(), bounds.right() - self.width() + 20)))
-        self.move(pos)
+        self._physics_position = pos
+        self._physics_anchor = pos.toPoint()
+        self.move(self._physics_anchor)
         return landed
 
     # ---------- input ----------
 
     def mousePressEvent(self, e: QMouseEvent):
         if e.button() == Qt.MouseButton.LeftButton:
+            self._physics_position = None
+            self._physics_anchor = None
+            self._physics_grounded = False
             self._dragging = True
             self._drag_start = e.globalPosition().toPoint()
             self._drag_max_distance = 0
@@ -538,7 +739,7 @@ class PetWidget(QWidget):
 
     def _draw_scaled(self, p: QPainter, scaled: QPixmap):
         p.drawPixmap((self.win_width - scaled.width()) // 2,
-                     self.height() - scaled.height(), scaled)
+                     self.height() - scaled.height() + self._render_offset_y(scaled), scaled)
 
     def _crossfaded_pixmap(self, idx: int, nxt: int, t: float) -> QPixmap:
         """Cross-dissolve premultiplied images without dark/opaque trails."""
@@ -576,7 +777,7 @@ class PetWidget(QWidget):
             p.rotate(rot)
             p.scale(sx, sy)
             p.translate(-rx - rw / 2, -ry - rh)
-        meta = self.sprites.states[self.state]
+        meta = self._animation_meta()
         idx = min(self.frame_idx, len(meta["frames"]) - 1)
         nxt, t = self._blend_info() if self.crossfade else (None, 0.0)
         frame = self._crossfaded_pixmap(idx, nxt, t) if nxt is not None and t > 0 else self._scaled_pm(idx)

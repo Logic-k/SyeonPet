@@ -1,7 +1,6 @@
 """Prompt-only window, readable opacity, and preservation on close/quit."""
 import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,8 +8,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QRect, QSettings
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QEvent, QEventLoop, QRect, QSettings, Qt, QTimer
+from PySide6.QtGui import QColor, QKeyEvent, QPalette
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from behavior import BehaviorController
@@ -136,6 +135,33 @@ class ChatWindowTests(unittest.TestCase):
             self.assertEqual(self.panel.minimumHeight(), 450)
             self.assertEqual(prompt.input.toPlainText(), "보존할 입력")
 
+    def test_shell_tab_order_and_opacity_geometry_are_stable(self):
+        self.panel.resize(360, 450)
+        self.panel.show()
+        self.panel._sleep_changed(True)
+        self.app.processEvents()
+        self.panel.opacity_slider.setFocus()
+        QApplication.sendEvent(self.panel.opacity_slider, QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.KeyboardModifier.NoModifier))
+        self.assertTrue(self.panel.wake_button.hasFocus())
+        self.assertTrue(self.panel.wake_button.accessibleName())
+        wake_size = self.panel.wake_button.size()
+        QApplication.sendEvent(self.panel.wake_button, QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier))
+        self.assertTrue(self.panel.opacity_slider.hasFocus())
+        self.app.processEvents()
+        self.assertEqual(self.panel.wake_button.size(), wake_size)
+        value_width = self.panel.opacity_value.width()
+        self.panel.opacity_slider.setValue(60)
+        self.app.processEvents()
+        self.assertEqual(self.panel.opacity_value.width(), value_width)
+        self.panel._sleep_changed(False)
+        self.panel.opacity_slider.setFocus()
+        QApplication.sendEvent(self.panel.opacity_slider, QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.KeyboardModifier.NoModifier))
+        self.assertTrue(self.panel.prompt_conversation.provider.hasFocus())
+        self.assertEqual(self.panel.conversation_scroll.focusPolicy(), Qt.FocusPolicy.NoFocus)
+
     def test_small_window_error_notice_is_visible_without_losing_focus_or_draft(self):
         self.panel.resize(360, 450)
         self.panel.show()
@@ -176,24 +202,32 @@ class ChatWindowTests(unittest.TestCase):
         prompt.history_toggle.click()
         prompt.input.setPlainText("회의 내용을 정리해 주세요")
         completed = []
-        prompt.result_ready.connect(lambda: completed.append(True))
+        loop = QEventLoop()
+        timeout = QTimer()
+        timeout.setSingleShot(True)
+        timeout.timeout.connect(loop.quit)
+
+        def finished():
+            completed.append(True)
+            # ChatPanel queues its result scroll on the same signal first.
+            QTimer.singleShot(0, loop.quit)
+
+        prompt.result_ready.connect(finished)
         self.app.processEvents()
+        prompt.input.setFocus()
         prompt.provider.setCurrentIndex(prompt.provider.findData("offline"))
+        timeout.start(5000)
         prompt.submit()
-        deadline = time.monotonic() + 5
-        while prompt.is_busy and time.monotonic() < deadline:
+        if not completed:
+            loop.exec()
+        else:
             self.app.processEvents()
-            time.sleep(.005)
-        # Completion scroll is queued after Qt finishes the focus/layout pass.
-        viewport = self.panel.conversation_scroll.viewport()
-        scroll_deadline = time.monotonic() + 1
-        while (prompt.result.mapTo(viewport, prompt.result.rect().topLeft()).y() + 60 >= viewport.height()
-               and time.monotonic() < scroll_deadline):
-            self.app.processEvents()
-            time.sleep(.005)
+        timeout.stop()
+        prompt.result_ready.disconnect(finished)
         self.assertFalse(prompt.is_busy)
         self.assertEqual(completed, [True])
         self.assertIn("회의 내용을 정리해 주세요", prompt.result.toPlainText())
+        viewport = self.panel.conversation_scroll.viewport()
         result_top = prompt.result.mapTo(viewport, prompt.result.rect().topLeft()).y()
         result_bottom = prompt.result.mapTo(viewport, prompt.result.rect().bottomLeft()).y()
         choice_top = prompt.result_choice.mapTo(viewport, prompt.result_choice.rect().topLeft()).y()

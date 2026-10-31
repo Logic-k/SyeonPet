@@ -34,6 +34,14 @@ class ThinkingBehaviorTests(unittest.TestCase):
     def finish_now(self):
         self.behavior._thinking_started -= 1.0
         self.behavior.end_thinking()
+        self.finish_bridge()
+
+    def finish_bridge(self):
+        if self.behavior.mode.startswith("transition:"):
+            self.assertIn(self.pet.state, ("sleep_bridge", "wake_bridge", "turn_bridge", "turn_front"))
+            self.pet._advance_frame(sum(self.pet._animation_meta()["durations"]) * self.pet.time_scale)
+            self.behavior._tick()
+            self.assertFalse(self.behavior.mode.startswith("transition:"))
 
     def test_loop_uses_thinking_sprite_and_resumes_walk_without_position_jump(self):
         self.behavior.wander()
@@ -72,6 +80,7 @@ class ThinkingBehaviorTests(unittest.TestCase):
                 self.behavior.begin_thinking()
                 action()
                 self.behavior.end_thinking()
+                self.finish_bridge()
                 self.assertEqual((self.behavior.mode, self.pet.state), expected)
 
     def test_request_never_wakes_completely_sleeping_pet_or_overrides_onboarding(self):
@@ -81,6 +90,7 @@ class ThinkingBehaviorTests(unittest.TestCase):
         self.behavior.end_thinking()
         self.assertEqual((self.behavior.mode, self.pet.state, self.behavior.fully_asleep), original)
         self.behavior.idle()
+        self.finish_bridge()
         self.behavior.onboarding_active = True
         self.behavior.begin_thinking()
         self.behavior.end_thinking()
@@ -102,6 +112,7 @@ class ThinkingBehaviorTests(unittest.TestCase):
     def test_sleep_remaining_time_is_frozen_while_thinking(self):
         with patch("behavior.time.monotonic", return_value=10.0):
             self.behavior.sleep()
+            self.finish_bridge()
             self.behavior.begin_thinking()
         with patch("behavior.time.monotonic", return_value=110.0):
             self.behavior.end_thinking()
@@ -115,6 +126,8 @@ class ThinkingBehaviorTests(unittest.TestCase):
                 self.behavior.begin_thinking()
                 self.assertTrue(self.behavior.sleeping)
                 self.behavior.wake()
+                self.assertFalse(self.behavior.sleeping)
+                self.finish_bridge()
                 self.assertEqual((self.behavior.mode, self.pet.state), ("idle", "idle"))
                 self.assertFalse(self.behavior.sleeping)
                 self.behavior.end_thinking()
@@ -130,6 +143,8 @@ class ThinkingBehaviorTests(unittest.TestCase):
                 self.behavior.end_thinking()
                 self.assertTrue(self.behavior._thinking_finish_pending)
                 action.trigger()
+                self.assertFalse(self.behavior.sleeping)
+                self.finish_bridge()
                 self.assertEqual((self.behavior.mode, self.pet.state), ("idle", "idle"))
                 self.assertFalse(self.behavior.sleeping)
                 self.behavior._finish_thinking()
@@ -200,6 +215,7 @@ class ThinkingBehaviorTests(unittest.TestCase):
         self.assertEqual(self.behavior.mode, "thinking")
         self.assertTrue(self.behavior._thinking_finish_pending)
         self.behavior._finish_thinking()
+        self.finish_bridge()
         self.assertEqual(self.behavior.mode, "walk")
 
     def test_new_request_cancels_visual_tail_without_overwriting_snapshot(self):

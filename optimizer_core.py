@@ -94,8 +94,65 @@ def _numbers(text: str) -> list[str]:
     return _unique(re.findall(r"\d+(?:[.,]\d+)*", text, flags=re.ASCII))
 
 
+_QUOTE = re.compile(r'"([^"\n]+)"|“([^”\n]+)”|‘([^’\n]+)’|(?<![A-Za-z0-9_])\'([^\'\n]+)\'(?![A-Za-z0-9_])')
+
+
 def _quotes(text: str) -> list[str]:
-    return _unique(a or b for a, b in re.findall(r'"([^"\n]{2,120})"|“([^”\n]{2,120})”', text))
+    phrases = (next(group for group in match.groups() if group is not None)
+               for match in _QUOTE.finditer(text))
+    return _unique(phrase for phrase in phrases if 2 <= len(phrase) <= 120)
+
+
+_CLAUSE = re.compile(r"[^.!?。！？;\n,]+")
+_PROHIBITION = re.compile(
+    r"금지|하지\s*(?:마|말)|하지\s*않|하지\s*말|넣지\s*(?:마|말)|쓰지\s*(?:마|말)|"
+    r"사용하지|포함하지|제외|빼\s*주세요|지어내지|만들지\s*(?:마|말)|추가하지|"
+    r"\b(?:do not|don't|must not|never|without|exclude|avoid)\b", re.IGNORECASE,
+)
+
+
+def _prohibitions(text: str) -> list[tuple[int, str]]:
+    """Extract recognizable prohibition clauses; never infer their meaning."""
+    found = []
+    for match in _CLAUSE.finditer(text):
+        clause = match.group().strip(" \t\r:：-–—")
+        if _PROHIBITION.search(clause):
+            found.append((match.start(), clause))
+    return found
+
+
+# Compare whole schedules as literals. Individual number comparison cannot
+# detect e.g. 11월 5일 becoming 5월 11일. This is not calendar validation.
+_HSPACE = r"[^\S\r\n\v\f\x85\u2028\u2029]"
+_DATE = re.compile(
+    rf"(?<!\d)(?:\d{{4}}년{_HSPACE}*)?\d{{1,2}}월{_HSPACE}*\d{{1,2}}일"
+    r"|(?<!\d)\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?!\d)"
+    r"|(?<!\d)\d{1,2}/\d{1,2}(?:/\d{2,4})?(?!\d)"
+    r"|\b(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+    rf"{_HSPACE}+\d{{1,2}}(?:,{_HSPACE}*\d{{4}})?\b", re.IGNORECASE,
+)
+_WEEKDAY = re.compile(r"[월화수목금토일]요일")
+_TIME = re.compile(
+    rf"(?<![\d:])(?:(?:오전|오후){_HSPACE}*)?"
+    rf"(?:\d{{1,2}}시(?:{_HSPACE}*\d{{1,2}}분)?|(?:[01]?\d|2[0-3]):[0-5]\d(?![\d:]))"
+)
+
+
+def _schedule_literals(text: str) -> list[str]:
+    """Return recognizable schedule literals in source order; not meaning."""
+    found = [(match.start(), match.group()) for pattern in (_DATE, _WEEKDAY, _TIME)
+             for match in pattern.finditer(text)]
+    return _unique(literal for _, literal in sorted(found))
+
+
+def _normalize_schedule(value: str) -> str:
+    """Ignore horizontal Unicode spacing and case, never newlines."""
+    return re.sub(_HSPACE + "+", "", value).casefold()
+
+
+def _missing_schedule(source: str, result: str) -> list[str]:
+    output = {_normalize_schedule(value) for value in _schedule_literals(result)}
+    return [value for value in _schedule_literals(source) if _normalize_schedule(value) not in output]
 
 
 # A narrow literal check, not a semantic parser: compare only an identifiable
@@ -110,7 +167,7 @@ _COUNT_WORD = "|".join(sorted(_KOREAN_COUNTS, key=len, reverse=True))
 _QUANTITY = re.compile(
     r"(?<![0-9A-Za-z가-힣.,])(?:(?P<prefix>최대|최소|약|대략|적어도)[ \t]*)?"
     rf"(?P<count>[0-9]+|{_COUNT_WORD})[ \t]*"
-    r"(?P<unit>페이지|문장|항목|단락|문단|단어|가지|쪽|줄|명|개|자)"
+    r"(?P<unit>페이지|문장|항목|단락|문단|단어|가지|쪽|줄|명|개|곳|자)"
     r"(?=\s|$|[,.!?:;)\]…]|이내|이하|이상|초과|미만|내외|정도|가량|으로|로|을|의|만|를|씩|와|과|가|는)"
     r"[ \t]*(?P<suffix>이내|이하|이상|초과|미만|내외|정도|가량)?"
 )
@@ -169,6 +226,25 @@ def review_result(prompt: str, context: str, result: str) -> list[str]:
         warnings.append("숫자 확인 필요: " + ", ".join(missing_numbers[:10]))
     if missing_quotes:
         warnings.append("따옴표 속 문구 확인 필요: " + ", ".join(missing_quotes[:10]))
+    missing_schedule = _missing_schedule(prompt + "\n" + context, result)
+    if missing_schedule:
+        warnings.append("날짜·요일·시간 확인 필요: " + ", ".join(missing_schedule[:10]))
+    missing_prohibitions = _unique(clause for source in (prompt, context)
+                                   for _, clause in _prohibitions(source)
+                                   if clause not in result)
+    if missing_prohibitions:
+        snippets = [value if len(value) <= 120 else value[:120] + "…"
+                    for value in missing_prohibitions[:5]]
+        warnings.append("금지 조건 원문 확인 필요: " + " / ".join(snippets)
+                        + " — 문자 비교이므로 표현이 달라졌을 수도 있습니다.")
+    if (re.search(r"문의|희망|예정|미확인", prompt + "\n" + context)
+            and re.search(r"확인된\s*사실|(?<!미)확정(?!되지|하지|\s*전)", result)):
+        warnings.append("문의·희망·예정·미확인 내용이 확정된 사실처럼 표현됐는지 원문과 대조해 주세요.")
+    # Identifying who is asking and who is responding requires interpretation.
+    # Offer a general check without copying names or guessing either role.
+    source = prompt + "\n" + context
+    if re.search(r"문의(?!처|전화|번호|메일)|질의|민원", source) and re.search(r"답변|회신", source):
+        warnings.append("문의한 사람이나 기관과 답변 작성자·수신자가 바뀌지 않았는지 원문과 대조해 주세요.")
     changed_bounds = _changed_quantity_bounds(prompt + "\n" + context, result)
     if changed_bounds:
         warnings.append("수량 범위 확인 필요: " + ", ".join(changed_bounds[:10])
@@ -197,6 +273,11 @@ _WRAPPING_FENCE = re.compile(r"\A```[^\n`]*\n([\s\S]*?)\n```\Z")
 _REQUEST_END = re.compile(r"(?:주세요|줘|주십시오|하세요|해라|하라|바랍니다)\s*[.!]?\s*\Z")
 _MATERIAL_CUE = re.compile(r"아래|다음|밑의")
 _FIELD_LINE = re.compile(r"^\s*[^:\n\[\]]{1,25}:\s", re.MULTILINE)
+_MATERIAL_SUBJECT = re.compile(r"자료|원문|본문|메모|기록|보고서")
+_MATERIAL_LINE = re.compile(r"^\s*(?:자료|원문|본문):[ \t]*(\S.*)$")
+_BRACKET_PLACEHOLDER = re.compile(r"\[([^\[\]\n]*)\]")
+_PASTE_ACTION = re.compile(r"붙여[ \t]*넣기")
+_OTHER_PLACEHOLDER = re.compile(r"연락처|전화|이메일|담당자|성명|실명|이름|주소|계좌|주민")
 KEEP_ORIGINAL_HEADING = "원래 요청 (위 내용과 다르면 이 원문을 따르세요):"
 KEEP_MATERIAL_HEADING = "자료 (원문 그대로):"
 
@@ -220,8 +301,9 @@ def _material(prompt: str) -> str:
     """Return text the user supplied to be worked on, in two plain layouts only.
 
     "번역해 주세요: <text>" on the first line, or a request line followed by
-    pasted text. Form-style lines ("항목: 값") and [placeholders], as used by
-    the templates, are conditions rather than material and are left alone.
+    pasted text. Form-style lines are treated as material only after an
+    explicit request ending with a colon or a source-specific request followed
+    entirely by at least two field lines. Template placeholders remain excluded.
     """
     lines = prompt.strip().splitlines()
     if not lines:
@@ -230,9 +312,20 @@ def _material(prompt: str) -> str:
     head, colon, tail = first.partition(":")
     if colon and tail.strip() and _REQUEST_END.search(head):
         return "\n".join(part for part in (tail.strip(), rest) if part)
-    if (rest and (first.rstrip().endswith(":") or (_MATERIAL_CUE.search(first) and _REQUEST_END.search(first)))
-            and not _FIELD_LINE.search(rest) and "[" not in rest):
-        return rest
+    # An explicit source on the last line is distinct from a form containing
+    # subsequent instructions. Do not treat placeholder templates as material.
+    if len(lines) > 1:
+        source_line = _MATERIAL_LINE.match(lines[-1])
+        if source_line and "[" not in source_line.group(1):
+            return source_line.group(1)
+    if rest and "[" not in rest:
+        explicit_boundary = first.rstrip().endswith(":") and _REQUEST_END.search(head)
+        source_request = _MATERIAL_CUE.search(first) and _REQUEST_END.search(first)
+        rest_lines = [line for line in rest.splitlines() if line.strip()]
+        field_only = len(rest_lines) >= 2 and all(_FIELD_LINE.match(line) for line in rest_lines)
+        if (explicit_boundary or (source_request and not _FIELD_LINE.search(rest))
+                or (source_request and _MATERIAL_SUBJECT.search(first) and field_only)):
+            return rest
     return ""
 
 
@@ -240,12 +333,25 @@ def _flat(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _single_material_placeholder(text: str) -> str:
+    """Recognize one unambiguous source slot, never contact or other fields."""
+    matches = list(_BRACKET_PLACEHOLDER.finditer(text))
+    if len(matches) != 1:
+        return ""
+    value = matches[0].group(1)
+    if (2 <= len(value) <= 40 and _MATERIAL_SUBJECT.search(value)
+            and _PASTE_ACTION.search(value) and not _OTHER_PLACEHOLDER.search(value)):
+        return matches[0].group(0)
+    return ""
+
+
 def keep_original_details(prompt: str, result: str, check_details: bool = True) -> tuple[str, list[str]]:
     """Tidy an AI-written prompt and re-attach original wording it lost.
 
     The AI is asked to keep numbers, quoted phrases and supplied material,
     but this is enforced here: when a literal check finds a missing number or
-    quote, or a changed exact/upper/lower bound, the original request is
+    quote, a changed exact/upper/lower bound, or a missing schedule literal,
+    the original request is
     appended verbatim; when only the supplied material is missing, that
     material is appended. Revisions may change values on purpose, so callers
     pass check_details=False for them.
@@ -253,16 +359,27 @@ def keep_original_details(prompt: str, result: str, check_details: bool = True) 
     text = _strip_wrapper(prompt, result) or result.strip()
     if not check_details:
         return text, []
+    material = _material(prompt)
+    inserted = False
+    placeholder = _single_material_placeholder(text)
+    if material and placeholder and _flat(material) not in _flat(text):
+        # Only one explicitly source-related paste slot is unambiguous.
+        text = text.replace(placeholder, material, 1)
+        inserted = True
     output_numbers = set(_numbers(text))
+    # A missing pasted passage is already reattached verbatim below. Avoid
+    # replacing its existing, more precise material handling with a duplicate
+    # full-request warning merely because the passage contains a schedule.
+    schedule_source = prompt.replace(material, "", 1) if material else prompt
     lost = (any(number not in output_numbers for number in _numbers(prompt))
             or any(quote not in text for quote in _quotes(prompt))
-            or bool(_changed_quantity_bounds(prompt, text)))
+            or bool(_changed_quantity_bounds(prompt, text))
+            or bool(_missing_schedule(schedule_source, text)))
     if lost:
         return (f"{text}\n\n{KEEP_ORIGINAL_HEADING}\n{prompt.strip()}",
-                ["AI 결과에서 빠지거나 바뀐 숫자·문구가 있어 원래 요청을 결과 끝에 원문 그대로 붙였어요."])
-    material = _material(prompt)
+                ["AI 결과에서 빠지거나 바뀐 숫자·일정·문구가 있어 원래 요청을 결과 끝에 원문 그대로 붙였어요."])
     core = material.strip().strip('"“”')
     if core and _flat(core) not in _flat(text):
         return (f"{text}\n\n{KEEP_MATERIAL_HEADING}\n{material}",
                 ["AI 결과에 자료 원문이 그대로 없어 결과 끝에 붙였어요."])
-    return text, []
+    return text, (["요청에 있던 자료 원문을 자료 빈칸에 그대로 넣었어요."] if inserted else [])

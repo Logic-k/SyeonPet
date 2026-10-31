@@ -22,6 +22,10 @@ PRESETS = {
     "scarf_pink": ("분홍 목도리", "따뜻한 분홍색 목도리예요."),
     "cardigan": ("하늘 가디건", "노란 단추가 달린 하늘색 가디건이에요."),
     "apron": ("노란 앞치마", "작은 주머니가 달린 노란 앞치마예요."),
+    "cardigan_mint": ("민트 가디건", "크림색 깃과 단추가 있는 민트 가디건이에요."),
+    "scarf_lavender": ("라벤더 목도리", "보랏빛 목도리로 따뜻하게 감싸요."),
+    "sailor": ("바다 세일러", "아이보리 줄무늬와 작은 매듭이 있는 남색 깃이에요."),
+    "cape_cozy": ("포근한 케이프", "둥근 크림색 깃을 두른 살구색 케이프예요."),
 }
 _HEAD = {"beret", "sunhat", "ribbon_hat"}
 _ASSETS = Path(__file__).resolve().parent / "assets" / "wardrobe_presets"
@@ -58,7 +62,8 @@ def _curated_frame(frame, choice):
         return None
     entry = _CURATED_LOOKUP.get(hashlib.sha256(bytes(image.constBits())).hexdigest())
     if (not isinstance(entry, list) or len(entry) != 5
-            or entry[0] not in ("main", "thinking")
+            or entry[0] not in ("main", "thinking", "stretch", "bow",
+                                "sleep_bridge", "turn_bridge")
             or any(type(v) is not int for v in entry[1:])
             or entry[1] < 0 or entry[2] < 0 or entry[3:] != [256, 256]):
         return None
@@ -266,6 +271,11 @@ def decorate_preset(frame: QPixmap, choice: str) -> QPixmap:
                     body_white = a > 230 and min(r, g, b) > 205 and max(r, g, b) - min(r, g, b) < 28
                     if not body_white or py <= face_bottom:
                         pixels[i:i + 4] = source[i:i + 4]
+                    else:
+                        # Source-over paint makes nearly opaque edge pixels
+                        # fully opaque. Clothing must retain the exact source
+                        # silhouette, including its antialiased alpha values.
+                        pixels[i + 3] = a
             result = QPixmap.fromImage(QImage(bytes(pixels), 256, 256, 1024,
                                               QImage.Format.Format_RGBA8888).copy())
         return result

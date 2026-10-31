@@ -119,6 +119,14 @@ class NetworkDisconnectTests(unittest.TestCase):
         behavior.timer.stop()
         self.addCleanup(pet.close)
         behavior.wander()
+        if pet.sprites.has("turn_bridge"):
+            self.assertEqual((behavior.mode, pet.state), ("transition:walk", "turn_bridge"))
+            before_turn = pet.pos()
+            pet._advance_frame(sum(pet._animation_meta()["durations"]) * pet.time_scale)
+            behavior._tick()
+            self.assertEqual(pet.pos(), before_turn)
+        self.assertEqual((behavior.mode, pet.state), ("walk", "walk"))
+        walking_target = behavior.target_x
         observed = []
 
         def on_busy(busy):
@@ -144,6 +152,7 @@ class NetworkDisconnectTests(unittest.TestCase):
             self.app.processEvents()
             time.sleep(.005)
         self.assertEqual(behavior.mode, "walk")
+        self.assertEqual(behavior.target_x, walking_target)
         self.assertFalse(behavior._thinking_finish_pending)
         self.assertEqual(self.panel.input.toPlainText(), "오프라인 연결 시험")
         self.assertIn("인터넷 연결과 DNS 설정을 확인", self.panel.status.text())

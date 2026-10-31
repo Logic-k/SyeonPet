@@ -1,4 +1,4 @@
-"""Optional prompt rewriting using the toolkit's two fixed AI services.
+"""Optional prompt rewriting using fixed AI services.
 
 Calling this module transmits the explicitly provided text to the chosen
 service. The UI must obtain consent and call it off the Qt event thread.
@@ -16,9 +16,13 @@ import socket
 import ssl
 import threading
 import time
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from optimizer_core import keep_original_details
+
+if TYPE_CHECKING:
+    from ai_profiles import AIProfile
 
 
 SYSTEM = (
@@ -29,7 +33,12 @@ SYSTEM = (
     "좋은 프롬프트에 담을 것 (요청에 맞는 것만 고릅니다)\n"
     "1. 첫 줄: 무엇을, 누구를 위해 만드는지 한 문장.\n"
     "2. 반드시 지킬 조건: 원문의 숫자, 날짜, 이름, 장소, 따옴표 속 문구, \"빼 줘\" 같은 금지사항을 원문 표현 그대로 옮깁니다. 정확한 수량과 범위를 구분해 '세 문장'을 '세 문장 이내'로 바꾸거나 '30명 이내'를 '30명'으로 바꾸지 마세요.\n"
+    "   문의한 내용, 예정, 희망, 미확인과 확정된 사실은 구분합니다. 문의한 날짜를 확정된 일정으로 바꾸거나 희망 회신일을 확정 기한으로 바꾸지 마세요. 원문에 없는 대상과 사실을 추가하지 마세요.\n"
+    "   원문에 없는 한 문의한 쪽이 답변을 작성한다고 바꾸지 마세요. 문의자·답변 작성자·수신자는 원문에 명시된 대로만 쓰고, 답변 주체가 명시되지 않으면 임의로 기관이나 사람을 정하지 마세요.\n"
+    "   예: '학교 두 곳이 점검 일정을 문의했어. 회신 초안을 요청해 줘' → '학교 두 곳의 점검 일정 문의에 대한 회신 초안을 작성해 주세요. 확인되지 않은 일정은 확인 필요로 두세요.' 학교는 문의자이며 답변 작성 기관은 정해진 정보가 아닙니다.\n"
+    "   문의자·답변 작성자·수신자의 역할을 혼동하지 말고, 회신 기한과 문의 연락처처럼 종류가 다른 정보를 바꾸거나 함께 묶지 마세요.\n"
     "3. 결과 형식: 구성(항목과 순서), 분량, 말투(공문체, 안내문, 쉬운 말 등)를 요청과 작업 유형에 맞게 제안합니다.\n"
+    "   사용자가 지정한 형식과 분량을 우선하고, 요청하지 않은 글자 수·문장 수·시간 배분·표 열을 필수 조건으로 만들지 마세요.\n"
     "4. 빠진 정보: 다른 AI가 알아야 하지만 원문과 맥락에 없는 정보는 지어내지 말고 [대괄호 자리표시자]로 남깁니다. 예: [대상 학년], [제출 기한], [담당자 연락처].\n"
     "5. 요약·검토·번역·분석처럼 자료가 있어야 하는 작업은 끝에 \"자료:\" 줄을 둡니다. 원래 요청에 들어 있는 자료(번역할 문장, 요약할 공문 등)는 \"자료:\" 아래에 한 글자도 바꾸지 말고 그대로 옮기고, 자료가 없으면 [자료 붙여 넣기] 자리를 남깁니다.\n"
     "\n"
@@ -66,7 +75,10 @@ SYSTEM = (
 _PROVIDERS = {
     "vireonix": ("https://vireonix.ai/v1/chat/completions", "auto"),
     "pollinations-classic": ("https://text.pollinations.ai/v1/chat/completions", "openai"),
+    # The documented no-credential route is restricted to this free alias.
+    "jarvisclaw": ("https://api.jarvisclaw.ai/v1/chat/completions", "auto/free"),
 }
+_PROFILE_PROVIDERS = frozenset(("chatgpt-subscription", "groq", "openrouter", "gemini", "ollama"))
 _TASKS = {
     "auto": "유형 지정 안 함", "general": "일반적인 질문이나 요청",
     "writing": "글쓰기와 편집", "coding": "프로그래밍과 개발",
@@ -109,8 +121,8 @@ def _validate(prompt, context, task, detail, provider, revision, previous_result
         raise OptimizationError("작업 유형을 확인해 주세요.")
     if not isinstance(detail, str) or detail not in _DETAILS:
         raise OptimizationError("상세 수준을 확인해 주세요.")
-    if not isinstance(provider, str) or provider not in _PROVIDERS:
-        raise OptimizationError("Vireonix 또는 Pollinations Classic을 선택해 주세요.")
+    if not isinstance(provider, str) or provider not in (*_PROVIDERS, *_PROFILE_PROVIDERS):
+        raise OptimizationError("설정한 AI 정리 방식을 선택해 주세요.")
 
 
 def _read_result(response, deadline=None):
@@ -130,10 +142,15 @@ def _read_result(response, deadline=None):
         value = json.loads(body.decode("utf-8"))
         choice = value["choices"][0]
         finish_reason = choice.get("finish_reason")
-        if finish_reason == "length":
+        if finish_reason in ("length", "max_tokens"):
             raise OptimizationError("AI 응답이 길이 제한으로 중간에 잘렸습니다. 요청을 줄여 다시 시도해 주세요.")
         if finish_reason == "content_filter":
             raise OptimizationError("AI 서비스의 콘텐츠 필터로 응답이 제한되었습니다.")
+        # Pollinations' documented schema permits a missing or null reason.
+        # When one is explicitly supplied, only a normal stop is accepted:
+        # tool calls, errors and unknown outcomes cannot be complete text.
+        if finish_reason is not None and finish_reason != "stop":
+            raise OptimizationError("모델 응답을 읽을 수 없습니다. 잠시 후 다시 시도해 주세요.")
         result = choice["message"]["content"]
         if not isinstance(result, str) or not result.strip():
             raise OptimizationError("모델 응답이 비어 있습니다.")
@@ -312,6 +329,8 @@ def _send(url, model, payload, provider):
                     message = "서비스 사용량 제한에 도달했습니다 (HTTP 429). 잠시 후 다시 시도해 주세요."
                 elif status == 402 and provider == "pollinations-classic":
                     message = "Pollinations Classic의 요청 간격이나 이용 한도 문제일 수 있습니다 (HTTP 402)."
+                elif status == 402 and provider == "jarvisclaw":
+                    message = "JarvisClaw 무료 요청을 처리할 수 없습니다 (HTTP 402). 잠시 후 다시 시도해 주세요."
                 elif status in (502, 503, 504):
                     message = f"AI 서비스가 일시적으로 응답하지 않습니다 (HTTP {status}). 잠시 후 다시 시도해 주세요."
                 else:
@@ -350,7 +369,8 @@ def _send(url, model, payload, provider):
 
 
 def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vireonix",
-                revision="", previous_result="") -> dict:
+                revision="", previous_result="", *, profile: AIProfile | None = None,
+                cancel: threading.Event | None = None) -> dict:
     """Rewrite explicitly supplied text; synchronous, use a worker thread.
 
     Pollinations concurrency and cooldown are per process; the provider can
@@ -358,7 +378,13 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
     """
     global _poll_last_started
     _validate(prompt, context, task, detail, provider, revision, previous_result)
-    url, model = _PROVIDERS[provider]
+    if cancel is not None and cancel.is_set():
+        raise OptimizationError("정리 요청을 취소했습니다.")
+    if provider in _PROFILE_PROVIDERS:
+        if profile is None or profile.provider != provider:
+            raise OptimizationError("선택한 AI의 연결 설정을 다시 확인해 주세요.")
+    elif profile is not None:
+        raise OptimizationError("기존 정리 방식에는 별도 AI 연결 설정을 사용하지 않습니다.")
     # A fresh random id per user action stops the service from answering with
     # a stored reply to a similar earlier request: on 2026-10-30 Vireonix
     # returned "월요일" and "3개" for requests changed to "화요일" and "4개".
@@ -369,7 +395,21 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
         payload["revision"] = revision
     if previous_result:
         payload["previous_result"] = previous_result
-    if provider == "pollinations-classic":
+    metadata = {}
+    if provider in _PROFILE_PROVIDERS:
+        from ai_backends import generate
+
+        started = time.perf_counter()
+        try:
+            result = generate(profile, SYSTEM, payload, cancel=cancel)
+        except ValueError as exc:
+            raise OptimizationError(str(exc)) from exc
+        if cancel is not None and cancel.is_set():
+            raise OptimizationError("정리 요청을 취소했습니다.")
+        metadata = {"provider": provider, "model": profile.model,
+                    "elapsed_ms": max(0, round((time.perf_counter() - started) * 1000))}
+    elif provider == "pollinations-classic":
+        url, model = _PROVIDERS[provider]
         if not _poll_lock.acquire(blocking=False):
             raise OptimizationError("Pollinations Classic 요청이 진행 중입니다. 완료 후 다시 시도해 주세요.")
         try:
@@ -382,8 +422,10 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
         finally:
             _poll_lock.release()
     else:
+        url, model = _PROVIDERS[provider]
         result = _send(url, model, payload, provider)
-        result = _unwrap_vireonix(result, prompt)
+        if provider == "vireonix":
+            result = _unwrap_vireonix(result, prompt)
     # A revision may change values on purpose, so only a first rewrite gets
     # the original wording re-attached when a literal check finds it lost.
     result, notes = keep_original_details(prompt, result, check_details=not revision)
@@ -393,4 +435,4 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
         *notes,
         "AI가 원문의 의미와 조건을 유지했는지 사용 전에 확인하세요.",
         "모델의 응답 개선 효과는 별도의 비교 평가가 필요합니다.",
-    ], "mode": "ai"}
+    ], "mode": "ai", **metadata}

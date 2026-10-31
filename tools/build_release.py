@@ -19,9 +19,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_FILES = (
-    "behavior.py", "bubble.py", "chat.py", "main.py", "onboarding.py",
+    "ai_backends.py", "ai_profiles.py", "ai_secrets.py", "ai_settings.py", "chatgpt_auth.py",
+    "behavior.py", "bubble.py", "chat.py", "focus_timer.py", "main.py", "motion_policy.py", "onboarding.py",
     "optimizer_ai.py", "optimizer_chat.py", "optimizer_core.py",
-    "optimizer_library.py", "optimizer_templates.py", "pet.py",
+    "optimizer_library.py", "optimizer_templates.py", "pet.py", "prompt_quality.py",
     "version.py", "update_checker.py", "update_trust.py", "updater_core.py",
     "updater_switch.py", "updater_ui.py", "wardrobe.py", "wardrobe_packs.py",
     "wardrobe_presets.py",
@@ -41,11 +42,23 @@ ASSETS = (
     "assets/sprite-sheet-alpha.png", "assets/prompt_templates.json",
     "assets/seobu_office_templates.json", "assets/thinking/manifest.json",
     "assets/thinking/sprite-sheet-alpha.png",
+    "assets/extra_motions/stretch/manifest.json",
+    "assets/extra_motions/stretch/sprite-sheet-alpha.png",
+    "assets/extra_motions/bow/manifest.json",
+    "assets/extra_motions/bow/sprite-sheet-alpha.png",
+    "assets/motion_bridges/sleep_bridge/manifest.json",
+    "assets/motion_bridges/sleep_bridge/sprite-sheet-alpha.png",
+    "assets/motion_bridges/turn_bridge/manifest.json",
+    "assets/motion_bridges/turn_bridge/sprite-sheet-alpha.png",
     "assets/wardrobe_presets/anchors.json", "assets/wardrobe_presets/apron.png",
     "assets/wardrobe_presets/beret.png",
     "assets/wardrobe_presets/cardigan.png", "assets/wardrobe_presets/ribbon_hat.png",
     "assets/wardrobe_presets/scarf_blue.png", "assets/wardrobe_presets/scarf_pink.png",
     "assets/wardrobe_presets/sunhat.png",
+    "assets/wardrobe_presets/cardigan_mint.png",
+    "assets/wardrobe_presets/scarf_lavender.png",
+    "assets/wardrobe_presets/sailor.png",
+    "assets/wardrobe_presets/cape_cozy.png",
     "assets/wardrobe_presets/curated-v2/lookup.json",
     "assets/wardrobe_presets/curated-v2/beret-main.png",
     "assets/wardrobe_presets/curated-v2/beret-thinking.png",
@@ -61,13 +74,68 @@ ASSETS = (
     "assets/wardrobe_presets/curated-v2/cardigan-thinking.png",
     "assets/wardrobe_presets/curated-v2/apron-main.png",
     "assets/wardrobe_presets/curated-v2/apron-thinking.png",
+    "assets/wardrobe_presets/curated-v2/cardigan_mint-main.png",
+    "assets/wardrobe_presets/curated-v2/cardigan_mint-thinking.png",
+    "assets/wardrobe_presets/curated-v2/scarf_lavender-main.png",
+    "assets/wardrobe_presets/curated-v2/scarf_lavender-thinking.png",
+    "assets/wardrobe_presets/curated-v2/sailor-main.png",
+    "assets/wardrobe_presets/curated-v2/sailor-thinking.png",
+    "assets/wardrobe_presets/curated-v2/cape_cozy-main.png",
+    "assets/wardrobe_presets/curated-v2/cape_cozy-thinking.png",
+    "assets/wardrobe_presets/curated-v2/beret-stretch.png",
+    "assets/wardrobe_presets/curated-v2/beret-bow.png",
+    "assets/wardrobe_presets/curated-v2/sunhat-stretch.png",
+    "assets/wardrobe_presets/curated-v2/sunhat-bow.png",
+    "assets/wardrobe_presets/curated-v2/ribbon_hat-stretch.png",
+    "assets/wardrobe_presets/curated-v2/ribbon_hat-bow.png",
+    "assets/wardrobe_presets/curated-v2/scarf_blue-stretch.png",
+    "assets/wardrobe_presets/curated-v2/scarf_blue-bow.png",
+    "assets/wardrobe_presets/curated-v2/scarf_pink-stretch.png",
+    "assets/wardrobe_presets/curated-v2/scarf_pink-bow.png",
+    "assets/wardrobe_presets/curated-v2/cardigan-stretch.png",
+    "assets/wardrobe_presets/curated-v2/cardigan-bow.png",
+    "assets/wardrobe_presets/curated-v2/apron-stretch.png",
+    "assets/wardrobe_presets/curated-v2/apron-bow.png",
+    "assets/wardrobe_presets/curated-v2/cardigan_mint-stretch.png",
+    "assets/wardrobe_presets/curated-v2/cardigan_mint-bow.png",
+    "assets/wardrobe_presets/curated-v2/scarf_lavender-stretch.png",
+    "assets/wardrobe_presets/curated-v2/scarf_lavender-bow.png",
+    "assets/wardrobe_presets/curated-v2/sailor-stretch.png",
+    "assets/wardrobe_presets/curated-v2/sailor-bow.png",
+    "assets/wardrobe_presets/curated-v2/cape_cozy-stretch.png",
+    "assets/wardrobe_presets/curated-v2/cape_cozy-bow.png",
+    "assets/wardrobe_presets/curated-v2/beret-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/beret-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/sunhat-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/sunhat-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/ribbon_hat-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/ribbon_hat-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/scarf_blue-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/scarf_blue-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/scarf_pink-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/scarf_pink-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/cardigan-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/cardigan-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/apron-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/apron-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/cardigan_mint-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/cardigan_mint-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/scarf_lavender-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/scarf_lavender-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/sailor-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/sailor-turn_bridge.png",
+    "assets/wardrobe_presets/curated-v2/cape_cozy-sleep_bridge.png",
+    "assets/wardrobe_presets/curated-v2/cape_cozy-turn_bridge.png",
 )
 # Only these public guides are bundled; other docs may contain private handoffs.
 GUIDES = (
+    "docs/AI_PROFILES.md",
+    "docs/CLOUD_AI_TEST_2026-10-31.md",
     "docs/유초등교육과_션_사용가이드.html",
     "docs/유초등교육과_션_사용가이드.pdf",
     "docs/SPRITE_WARDROBE.md",
     "docs/WARDROBE_CURATION.md",
+    "docs/WARDROBE_MOTIONS_2026-10-31.md",
 )
 DIST_INFOS = (
     "pyside6-6.11.2.dist-info", "pyside6_essentials-6.11.2.dist-info",
@@ -103,12 +171,20 @@ SyeonPet.exe를 실행하세요. run.cmd는 동일한 소스를 실행하는 대
 설정 config.json은 새 배포물의 공개 기본값입니다. 기존 앱의 개인 설정을 자동으로
 덮어쓰거나 이전하지 않습니다. 보관함은 사용자 로컬 앱 데이터에 별도로 저장됩니다.
 외부 AI로 보내기 전에는 기관의 개인정보 지침과 허용 서비스를 확인하세요.
-처음 선택된 Vireonix는 사용자가 전송을 확인할 때만 요청을 보냅니다.
+처음 선택된 JarvisClaw는 사용자가 전송을 확인할 때만 요청을 보냅니다.
 기본 정리 (AI 사용 안 함)를 선택하면 외부 AI 호출 없이 입력을 정리합니다.
+AI 설정에서 개인 연결을 추가할 수 있습니다. ChatGPT 구독 로그인, 무료 API와
+로컬 Ollama는 서로 다른 연결이며 사용 조건과 한도도 다릅니다.
+연결과 프롬프트 검토·비교 사용법은 docs/AI_PROFILES.md를 확인하세요.
+무료 클라우드 AI 시험 결과는 docs/CLOUD_AI_TEST_2026-10-31.md를 확인하세요.
 션을 우클릭하여 션이 옷장을 열고 장식이나 검증한 외형 팩을 선택할 수 있습니다.
 스프라이트 팩 형식은 docs/SPRITE_WARDROBE.md를 참고하세요.
 자세별 의상 제작 기록은 docs/WARDROBE_CURATION.md를 참고하세요.
+새 옷과 기지개·꾸벅 인사는 docs/WARDROBE_MOTIONS_2026-10-31.md를 참고하세요.
 새 업데이트는 서명 확인 후 준비되며 션 메뉴에서 종료하고 다시 실행할 때 적용됩니다.
+고요 모드 (작업 계속)는 션의 자동 움직임을 멈추되 프롬프트 작업을 막지 않습니다.
+Windows의 애니메이션 효과를 끈 경우에도 자동으로 동작 줄이기를 적용합니다.
+차분 모드는 천천히 움직이며, 완전 수면은 새 보내기를 잠시 막는 별도 기능입니다.
 이전 v0.1.5 이하에서는 자동 업데이트를 사용할 수 없어 이 버전을 한 번 직접 설치해야 합니다.
 사용 방법은 docs/유초등교육과_션_사용가이드.html 또는
 docs/유초등교육과_션_사용가이드.pdf에서 확인하세요. 자세한 제3자 고지는 licenses를 보세요.

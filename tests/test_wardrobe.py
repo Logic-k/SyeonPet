@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QEvent, QRect, QSettings, Qt
+from PySide6.QtGui import QKeyEvent, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from pet import ASSETS, PetWidget, SpriteBank
@@ -82,6 +83,7 @@ class WardrobeTests(unittest.TestCase):
             self.assertEqual(window.motion_combo.count(), len(self.bank.states))
             for state, meta in self.bank.states.items():
                 with self.subTest(state=state):
+                    meta = meta.get("playback", meta)
                     index = window.motion_combo.findData(state)
                     self.assertGreaterEqual(index, 0)
                     window.motion_combo.setCurrentIndex(index)
@@ -89,11 +91,40 @@ class WardrobeTests(unittest.TestCase):
                     window.preview_slider.setValue(len(meta["frames"]) - 1)
                     self.assertEqual(window.preview_count.text(), f'{len(meta["frames"])} / {len(meta["frames"])}')
                     self.assertIn(window.preview_count.text(), window.preview_count.accessibleName())
-                    expected = decorate_frame(meta["frames"][-1], "bow").scaled(
+                    # Preview must use the same costume/pose geometry as the pet.
+                    expected = self.pet._frame_pm(len(meta["frames"]) - 1, state, False)
+                    if offset := meta.get("render_offset_y", 0):
+                        canvas = QPixmap(expected.size())
+                        canvas.fill(Qt.GlobalColor.transparent)
+                        painter = QPainter(canvas)
+                        painter.drawPixmap(0, offset, expected)
+                        painter.end()
+                        expected = canvas
+                    expected = expected.scaled(
                         150, 150, Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation)
                     self.assertEqual(pixels(window.preview.pixmap()), pixels(expected))
             self.assertEqual((self.pet.state, self.pet.frame_idx), (old_state, old_frame))
+        finally:
+            window.close()
+
+    def test_motion_preview_includes_recovery_pose_and_its_duration(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            for state in ("stretch", "bow"):
+                with self.subTest(state=state):
+                    window.motion_combo.setCurrentIndex(window.motion_combo.findData(state))
+                    window.preview_slider.setValue(3)
+                    window._preview_playing = True
+                    window._advance_preview()
+                    self.assertEqual(window.preview_slider.value(), 4)
+                    self.assertEqual(window._preview_timer.interval(), 140)
+                    self.assertEqual(window.preview_slider.maximum(), 6)
+                    expected = decorate_frame(self.bank.states[state]["frames"][2],
+                                              self.pet.wardrobe_choice).scaled(
+                        150, 150, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+                    self.assertEqual(pixels(window.preview.pixmap()), pixels(expected))
         finally:
             window.close()
 
@@ -137,6 +168,86 @@ class WardrobeTests(unittest.TestCase):
             self.assertFalse(window._preview_playing)
             self.assertFalse(window._preview_timer.isActive())
             self.assertEqual(window.preview_play.text(), "재생")
+        finally:
+            window.close()
+
+    def test_compact_work_area_and_long_choices_do_not_add_horizontal_scroll(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            with patch.object(window, "_fit_to_work_area"):
+                window.show()
+                self.app.processEvents()
+                window.pack_combo.addItem("가져온 외형 " * 20, "long-display-only")
+                window.pack_combo.setCurrentIndex(window.pack_combo.count() - 1)
+                for bounds in (QRect(-700, 20, 360, 360), QRect(-700, 20, 300, 300)):
+                    with self.subTest(bounds=bounds):
+                        window._fit_to_bounds(bounds)
+                        self.app.processEvents()
+                        self.assertTrue(bounds.contains(window.frameGeometry()),
+                                        f"{window.frameGeometry()} outside {bounds}")
+                        self.assertEqual(window.scroll.horizontalScrollBar().maximum(), 0)
+                        self.assertGreater(window.scroll.verticalScrollBar().maximum(), 0)
+                window._fit_to_bounds(QRect(0, 0, 1400, 900))
+                self.assertEqual(window.minimumWidth(), 350)
+                self.assertEqual(window.minimumHeight(), 300)
+        finally:
+            window.close()
+
+    def test_keyboard_order_scrolls_controls_into_view_in_both_directions(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            window.resize(350, 300)
+            window.show()
+            self.app.processEvents()
+            self.assertFalse(window._preview_playing)
+            self.assertFalse(window._preview_timer.isActive())
+            order = (window.pack_combo, window.add_pack, window.choice_combo,
+                     window.motion_combo, window.preview_play, window.preview_flip,
+                     window.preview_slider, window.buttons[self.pet.wardrobe_choice],
+                     window.close_button)
+            window.pack_combo.setFocus()
+            for previous, following in zip(order, order[1:]):
+                QApplication.sendEvent(previous, QKeyEvent(
+                    QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.KeyboardModifier.NoModifier))
+                self.app.processEvents()
+                self.assertTrue(following.hasFocus(), following.accessibleName())
+                self.assertTrue(following.accessibleName())
+                top = following.mapTo(window.scroll.viewport(), following.rect().topLeft()).y()
+                self.assertGreaterEqual(top, 0)
+                self.assertLess(top + following.height(), window.scroll.viewport().height() + 1)
+            for following, previous in zip(reversed(order), list(reversed(order))[1:]):
+                QApplication.sendEvent(following, QKeyEvent(
+                    QEvent.Type.KeyPress, Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier))
+                self.app.processEvents()
+                self.assertTrue(previous.hasFocus(), previous.accessibleName())
+            self.assertEqual(window.scroll.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        finally:
+            window.close()
+
+    def test_control_boxes_stay_stable_across_focus_hover_disabled_and_play(self):
+        window = WardrobeWindow(self.pet)
+        try:
+            window.show()
+            self.app.processEvents()
+            controls = (window.pack_combo, window.add_pack, window.preview_play, window.close_button)
+            sizes = [control.size() for control in controls]
+            for control in controls:
+                control.setFocus()
+                QApplication.sendEvent(control, QEvent(QEvent.Type.Enter))
+                self.app.processEvents()
+                self.assertEqual([item.size() for item in controls], sizes)
+                QApplication.sendEvent(control, QEvent(QEvent.Type.Leave))
+                control.setEnabled(False)
+                self.app.processEvents()
+                self.assertEqual([item.size() for item in controls], sizes)
+                control.setEnabled(True)
+            window.preview_play.click()
+            self.app.processEvents()
+            self.assertTrue(window._preview_playing)
+            self.assertEqual([item.size() for item in controls], sizes)
+            window.preview_play.click()
+            self.app.processEvents()
+            self.assertEqual([item.size() for item in controls], sizes)
         finally:
             window.close()
 

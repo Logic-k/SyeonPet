@@ -241,12 +241,13 @@ def run():
                     app.processEvents()
                     time.sleep(.01)
                 app.processEvents()
-            assert not prompt.is_busy and "시험용 연결 실패" in prompt.status.text()
+            assert not prompt.is_busy and "연결 실패 또는 정리 중 오류" in prompt.status.text()
+            assert "시험용 연결 실패" not in prompt.status.text()
             assert prompt.input.toPlainText() == before_input
             assert prompt.result.toPlainText() == before_result
             capture(chat, output / "conversation-small-error.png")
             notice = prompt.inline_notice
-            assert notice.isVisible() and "시험용 연결 실패" in notice.text()
+            assert notice.isVisible() and "연결 실패 또는 정리 중 오류" in notice.text()
             error_report = inspect_widget(chat, {"notice": notice})["notice"]
             ancestor = notice.parentWidget()
             while ancestor is not None and not isinstance(ancestor, QScrollArea):
@@ -269,7 +270,8 @@ def run():
                     app.processEvents()
                     time.sleep(.01)
                 app.processEvents()
-            assert not prompt.is_busy and "시험용 재시도 실패" in prompt.inline_notice.text()
+            assert not prompt.is_busy and "연결 실패 또는 정리 중 오류" in prompt.inline_notice.text()
+            assert "시험용 재시도 실패" not in prompt.inline_notice.text()
             assert prompt.input.toPlainText() == before_input
             assert prompt.result.toPlainText() == before_result
             capture(chat, output / "conversation-small-history-error.png")

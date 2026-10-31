@@ -118,13 +118,75 @@ class AiOptimizerTests(unittest.TestCase):
         finally:
             ai._poll_lock.release()
 
+    def test_jarvisclaw_uses_only_documented_free_endpoint_without_credentials(self):
+        remote = io.BytesIO(response("가상 연수 안내를 작성해 주세요."))
+        remote.status = 200
+        conn = MagicMock()
+        conn.getresponse.return_value = remote
+        with patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                patch.object(ai, "_PinnedHTTPSConnection", return_value=conn) as factory:
+            result = ai.optimize_ai("가상 연수 안내", provider="jarvisclaw")
+        self.assertEqual(result["result"], "가상 연수 안내를 작성해 주세요.")
+        self.assertEqual(factory.call_args.args[:2], ("api.jarvisclaw.ai", "8.8.8.8"))
+        request = conn.request.call_args
+        self.assertEqual(request.args, ("POST", "/v1/chat/completions"))
+        self.assertNotIn("Authorization", request.kwargs["headers"])
+        self.assertEqual(json.loads(request.kwargs["body"])["model"], "auto/free")
+        conn.request.assert_called_once()
+
+    def test_jarvisclaw_payment_response_never_retries_or_switches_provider(self):
+        conn = MagicMock()
+        conn.getresponse.return_value.status = 402
+        with patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                patch.object(ai, "_PinnedHTTPSConnection", return_value=conn) as factory:
+            with self.assertRaisesRegex(ai.OptimizationError, "무료 요청.*402"):
+                ai.optimize_ai("가상 요청", provider="jarvisclaw")
+        factory.assert_called_once()
+        conn.request.assert_called_once()
+
     def test_invalid_or_incomplete_response_rejected(self):
-        values = [response("부분", "length"), response("부분", "content_filter"),
+        values = [response("부분", "length"), response("부분", "max_tokens"),
+                  response("부분", "content_filter"), response("부분", "tool_calls"),
+                  response("부분", "function_call"), response("부분", "error"),
+                  response("부분", "PRIVATE_UNKNOWN"), response("부분", 123),
                   response("  "), b"not-json", b'{"choices":["x"]}', b"x" * 2_000_001]
         for data in values:
-            with self.subTest(size=len(data)), self.assertRaises(ai.OptimizationError):
+            with self.subTest(size=len(data)), self.assertRaises(ai.OptimizationError) as raised:
                 ai._read_result(io.BytesIO(data))
+            self.assertNotIn("PRIVATE_UNKNOWN", str(raised.exception))
         self.assertEqual(ai._read_result(io.BytesIO(response("완료", None))), "완료")
+        omitted = json.dumps({"choices": [{"message": {"content": "완료"}}]}, ensure_ascii=False).encode("utf-8")
+        self.assertEqual(ai._read_result(io.BytesIO(omitted)), "완료")
+        with self.assertRaisesRegex(ai.OptimizationError, "중간에 잘렸습니다"):
+            ai._read_result(io.BytesIO(response("부분", "max_tokens")))
+
+    def test_request_does_not_turn_inquiries_or_wishes_into_confirmed_facts(self):
+        prompt = ("가상의 학교 2곳이 12월 1일 시설 점검 일정에 대해 문의했어. "
+                  "11월 10일 회신을 희망하며 담당 부서와 기한은 미확인이야.")
+        with patch.object(ai, "_send", return_value="가상 결과") as send:
+            ai.optimize_ai(prompt, provider="jarvisclaw")
+        payload = send.call_args.args[2]
+        self.assertEqual(payload["original_request"], prompt)
+        self.assertIn("문의한 날짜를 확정된 일정으로 바꾸거나 희망 회신일을 확정 기한으로 바꾸지", ai.SYSTEM)
+        self.assertIn("문의자·답변 작성자·수신자의 역할을 혼동하지", ai.SYSTEM)
+        self.assertIn("회신 기한과 문의 연락처처럼 종류가 다른 정보를", ai.SYSTEM)
+        self.assertIn("답변 주체가 명시되지 않으면 임의로 기관이나 사람을 정하지", ai.SYSTEM)
+        self.assertIn("학교 두 곳의 점검 일정 문의에 대한 회신 초안", ai.SYSTEM)
+        self.assertIn("원문에 없는 한 문의한 쪽이 답변을 작성한다고 바꾸지", ai.SYSTEM)
+
+    def test_role_guidance_does_not_modify_source_context_or_revision(self):
+        prompt = "학교가 교육청에 문의한 내용을 정리하고 답변 초안을 요청해 줘."
+        context = "교육청 담당자가 학교에 회신합니다."
+        revision = "답변은 두 문장으로 줄여 줘."
+        previous = "교육청이 학교의 문의에 답변합니다."
+        with patch.object(ai, "_send", return_value="교육청이 학교의 문의에 답변해 주세요.") as send:
+            ai.optimize_ai(prompt, context=context, provider="jarvisclaw",
+                           revision=revision, previous_result=previous)
+        payload = send.call_args.args[2]
+        self.assertEqual(payload["original_request"], prompt)
+        self.assertEqual(payload["context"], context)
+        self.assertEqual(payload["revision"], revision)
+        self.assertEqual(payload["previous_result"], previous)
 
     def test_http_failure_does_not_retry_and_never_contains_private_content(self):
         conn = MagicMock()

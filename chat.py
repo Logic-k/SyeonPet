@@ -51,7 +51,7 @@ class ChatPanel(QWidget):
         self.opacity_slider.setSingleStep(5)
         self.opacity_value = QLabel()
         self.opacity_value.setObjectName("windowControlLabel")
-        self.opacity_value.setMinimumWidth(38)
+        self.opacity_value.setMinimumWidth(self.opacity_value.fontMetrics().horizontalAdvance("100%"))
         opacity_label.setBuddy(self.opacity_slider)
         opacity_row.addWidget(opacity_label)
         opacity_row.addWidget(self.opacity_slider)
@@ -64,6 +64,7 @@ class ChatPanel(QWidget):
         self.sleep_notice.setWordWrap(True)
         self.wake_button = QPushButton("션 깨우기")
         self.wake_button.setObjectName("wakePet")
+        self.wake_button.setAccessibleName("잠든 션 깨우기")
         self.wake_button.clicked.connect(self.behavior.wake)
         sleep_row.addWidget(self.sleep_notice, 1)
         sleep_row.addWidget(self.wake_button)
@@ -73,6 +74,7 @@ class ChatPanel(QWidget):
         self.conversation_scroll = QScrollArea(self)
         self.conversation_scroll.setObjectName("conversationScroll")
         self.conversation_scroll.setAccessibleName("프롬프트 대화 영역")
+        self.conversation_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.conversation_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.conversation_scroll.setWidgetResizable(True)
         self.conversation_scroll.setStyleSheet("""
@@ -83,9 +85,11 @@ class ChatPanel(QWidget):
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: #e3ebf0; }
         """)
         self.conversation_scroll.setWidget(self.prompt_conversation)
+        # The conversation owns its internal order; only join the shell controls.
+        QWidget.setTabOrder(self.opacity_slider, self.wake_button)
+        QWidget.setTabOrder(self.wake_button, self.prompt_conversation.provider)
         self.prompt_conversation.notice_raised.connect(
-            lambda: self.conversation_scroll.ensureWidgetVisible(
-                self.prompt_conversation.inline_notice, 0, 12))
+            lambda: QTimer.singleShot(0, self._reveal_prompt_notice))
         self.prompt_conversation.result_ready.connect(
             lambda: QTimer.singleShot(0, self._show_result))
         layout.addWidget(self.conversation_scroll, 1)
@@ -99,6 +103,12 @@ class ChatPanel(QWidget):
         self.opacity_slider.setValue(max(self.MIN_OPACITY, min(self.MAX_OPACITY, saved)))
         self._apply_opacity(self.opacity_slider.value(), persist=False)
         self.opacity_slider.valueChanged.connect(self._set_opacity)
+
+    def _reveal_prompt_notice(self):
+        # Let the new notice and wrapped controls finish layout before scrolling.
+        self.prompt_conversation.layout().activate()
+        self.conversation_scroll.ensureWidgetVisible(
+            self.prompt_conversation.inline_notice, 0, 12)
 
     def _apply_opacity(self, value: int, persist: bool):
         value = max(self.MIN_OPACITY, min(self.MAX_OPACITY, int(value)))

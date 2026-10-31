@@ -41,6 +41,13 @@ class SleepAndMotionTests(unittest.TestCase):
                             Qt.KeyboardModifier.NoModifier)
         QApplication.sendEvent(self.pet, event)
 
+    def finish_bridge(self):
+        if self.behavior.mode.startswith("transition:"):
+            self.assertIn(self.pet.state, ("sleep_bridge", "wake_bridge", "turn_bridge", "turn_front"))
+            self.pet._advance_frame(sum(self.pet._animation_meta()["durations"]) * self.pet.time_scale)
+            self.behavior._tick()
+            self.assertFalse(self.behavior.mode.startswith("transition:"))
+
     def test_full_sleep_pauses_prompt_sends_and_wake_preserves_drafts(self):
         prompt = self.panel.prompt_conversation
         prompt.input.setPlainText("작성 중인 정리 요청")
@@ -105,6 +112,8 @@ class SleepAndMotionTests(unittest.TestCase):
         self.pet._dragging = False
         with patch.object(self.pet, "physics_step", return_value=True):
             self.behavior._tick()
+        self.assertTrue(self.behavior.sleeping)
+        self.finish_bridge()
         self.assertEqual(self.behavior.mode, "sleep")
         self.assertFalse(self.behavior.fully_asleep)
 
@@ -118,6 +127,7 @@ class SleepAndMotionTests(unittest.TestCase):
                 self.assertEqual(self.behavior.mode, "drag")
                 self.send_mouse(QEvent.Type.MouseButtonRelease)
                 self.assertFalse(self.behavior.fully_asleep)
+                self.finish_bridge()
                 self.assertEqual(self.behavior.mode, "oneshot:idle")
                 self.assertFalse(self.behavior._fell)
                 self.assertTrue(self.panel.prompt_conversation.send.isEnabled())
@@ -173,13 +183,17 @@ class SleepAndMotionTests(unittest.TestCase):
             for count in range(1, 4):
                 self.behavior.mode_until = 0
                 self.behavior._tick()
+                self.finish_bridge()
                 self.assertEqual(self.behavior.mode, "walk")
                 self.behavior.target_x = self.pet.x()
                 self.behavior._tick()
+                self.finish_bridge()
                 self.assertEqual(self.behavior.idle_ticks, count)
         self.behavior.mode_until = 0
         with patch("behavior.random.random", return_value=0.1):
             self.behavior._tick()
+        self.assertTrue(self.behavior.sleeping)
+        self.finish_bridge()
         self.assertEqual(self.behavior.mode, "sleep")
 
 
