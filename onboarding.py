@@ -115,7 +115,7 @@ class OnboardingTour(QObject):
         body = s.get("text", "")
         if s.get("title"):
             body = f"<b>{s['title']}</b><br>{body}"
-        return body + f"<br><span style='color:#9a8f84'>{i + 1} / {len(self.steps)}</span>"
+        return body + f"<br><span style='color:#6b6257'>{i + 1} / {len(self.steps)}</span>"
 
     def _anchor_x(self, step: dict) -> int:
         bounds = self.pet.screen_bounds()

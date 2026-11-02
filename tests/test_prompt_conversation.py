@@ -94,7 +94,8 @@ class PromptConversationTests(unittest.TestCase):
         self.panel._clarification_dialog.findChild(QDialogButtonBox).button(
             QDialogButtonBox.StandardButton.Apply).click()
         self.assertEqual(self.panel.input.toPlainText(), raw)
-        self.assertEqual(self.panel._clarifications, "inquiry_roles: " + roles)
+        self.assertEqual(self.panel._clarifications,
+                         "확정된 문의·답변 역할 (사용자 확인):\n" + roles)
         self.panel.provider.setCurrentIndex(self.panel.provider.findData("jarvisclaw"))
         with patch("optimizer_chat.optimize_ai", return_value={"result": "회신 초안", "notes": []}) as generate:
             self.panel.submit()
@@ -102,7 +103,8 @@ class PromptConversationTests(unittest.TestCase):
             self.panel._confirmation.button(QMessageBox.StandardButton.Yes).click()
             self._wait_idle()
         self.assertEqual(generate.call_args.args[0], raw)
-        self.assertEqual(generate.call_args.kwargs["context"], "inquiry_roles: " + roles)
+        self.assertEqual(generate.call_args.kwargs["context"],
+                         "확정된 문의·답변 역할 (사용자 확인):\n" + roles)
         self.assertIn("문의한 사람이나 기관", self.panel.status.text())
         self.assertEqual(self.panel.original, raw)
         self.panel.clarify.click()
@@ -123,6 +125,102 @@ class PromptConversationTests(unittest.TestCase):
         self.panel._clarification_dialog.reject()
         self.assertEqual(self.panel._clarifications, "")
         self.assertEqual(self.panel.input.toPlainText(), raw)
+
+    def test_applied_answers_use_korean_labels_without_ascii_keys(self):
+        raw = "가상 학교가 교육청에 문의한 내용의 회신 초안을 요청해 줘."
+        roles = "문의자: 가상 학교 / 답변자: 교육청"
+        self.panel.input.setPlainText(raw)
+        self.panel.clarify.click()
+        fields = self.panel._clarification_fields
+        fields["purpose"].setText("QA_PURPOSE")
+        fields["audience"].setText("QA_AUDIENCE")
+        fields["inquiry_roles"].setText(roles)
+        self.panel._clarification_dialog.findChild(QDialogButtonBox).button(
+            QDialogButtonBox.StandardButton.Apply).click()
+        lines = self.panel._clarifications.split("\n")
+        self.assertIn("목적: QA_PURPOSE", lines)
+        self.assertIn("대상: QA_AUDIENCE", lines)
+        self.assertIn("확정된 문의·답변 역할 (사용자 확인):", lines)
+        self.assertIn(roles, lines)
+        for key in ("purpose:", "audience:", "format:", "deadline:", "inquiry_roles:"):
+            self.assertNotIn(key, self.panel._clarifications)
+
+    def test_apply_refuses_conditions_over_the_utf16_limit_and_keeps_the_dialog(self):
+        raw = "가상 학교가 교육청에 문의한 내용의 회신 초안을 요청해 줘."
+        self.panel.input.setPlainText(raw)
+        self.panel.clarify.click()
+        dialog = self.panel._clarification_dialog
+        self.panel._clarification_fields["purpose"].setText("가" * 2001)
+        dialog.findChild(QDialogButtonBox).button(
+            QDialogButtonBox.StandardButton.Apply).click()
+        self.assertEqual(self.panel._clarifications, "")
+        self.assertTrue(dialog.isVisible())
+        self.assertIn("2,000자", self.panel.inline_notice.text())
+        dialog.reject()
+
+    def test_oversized_context_is_refused_before_consent_or_worker(self):
+        self.panel._clarifications = "가" * 2001
+        self.panel.input.setPlainText("QA_INPUT")
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("jarvisclaw"))
+        with patch("optimizer_chat.optimize_ai") as generate, \
+                patch("optimizer_chat.threading.Thread") as thread:
+            self.panel.submit()
+        generate.assert_not_called()
+        thread.assert_not_called()
+        self.assertFalse(hasattr(self.panel, "_confirmation"))
+        self.assertIn("2,000자", self.panel.inline_notice.text())
+        self.assertEqual(self.panel.input.toPlainText(), "QA_INPUT")
+
+    def test_oversized_revision_is_refused_before_consent_or_worker(self):
+        self._submit_offline("QA_ORIGINAL")
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("jarvisclaw"))
+        self.panel.input.setPlainText("가" * 2001)
+        with patch("optimizer_chat.optimize_ai") as generate, \
+                patch.object(self.panel, "_confirm") as confirm:
+            self.panel.submit()
+        generate.assert_not_called()
+        confirm.assert_not_called()
+        self.assertIn("수정 요청이 2,000자", self.panel.inline_notice.text())
+        self.assertEqual(self.panel.input.toPlainText(), "가" * 2001)
+
+    def test_oversized_context_is_refused_before_comparison_consent(self):
+        self.panel._clarifications = "가" * 2001
+        self.panel.input.setPlainText("QA_INPUT")
+        with patch("optimizer_chat.optimize_ai") as generate, \
+                patch.object(self.panel, "_confirm") as confirm:
+            self.panel.compare.click()
+            first, second = self.panel._comparison_choices
+            first.setCurrentIndex(first.findData("offline"))
+            second.setCurrentIndex(second.findData("jarvisclaw"))
+            self.panel._comparison_dialog.findChild(QPushButton).click()
+        confirm.assert_not_called()
+        generate.assert_not_called()
+        self.assertIn("2,000자", self.panel.inline_notice.text())
+        self.panel._comparison_dialog.reject()
+
+    def test_old_role_label_restores_under_the_role_heading_once(self):
+        self._submit_offline("QA_ORIGINAL")
+        state = self.panel.export_update_state()
+        state["clarifications"] = "inquiry_roles: 문의자: 학교"
+        self.panel._clear_request()
+        self.panel.restore_update_state(state)
+        expected = "확정된 문의·답변 역할 (사용자 확인):\n문의자: 학교"
+        self.assertEqual(self.panel._clarifications, expected)
+        state = self.panel.export_update_state()
+        self.panel._clear_request()
+        self.panel.restore_update_state(state)
+        self.assertEqual(self.panel._clarifications, expected)
+
+    def test_unreadable_request_settings_show_a_notice_instead_of_raising(self):
+        self.panel.provider.setCurrentIndex(self.panel.provider.findData("jarvisclaw"))
+        self.panel.input.setPlainText("QA_INPUT")
+        with patch.object(self.panel, "_request_snapshot", side_effect=OSError("QA_PRIVATE")), \
+                patch.object(self.panel, "_confirm") as confirm:
+            self.panel.submit()
+        confirm.assert_not_called()
+        self.assertIn("연결 설정을 읽지 못했어요", self.panel.inline_notice.text())
+        self.assertNotIn("QA_PRIVATE", self.panel.inline_notice.text())
+        self.assertEqual(self.panel.input.toPlainText(), "QA_INPUT")
 
     def test_profile_revision_or_model_change_invalidates_selected_consent(self):
         from dataclasses import replace
@@ -1121,6 +1219,17 @@ class PromptConversationTests(unittest.TestCase):
         self.assertEqual(self.panel.copy.text(), label)
         self.assertEqual(self.panel.result.toPlainText(), "QA_NEW")
         self.assertNotEqual(self.panel.status.text(), status)
+
+    def test_copy_with_empty_result_shows_notice_and_leaves_clipboard_alone(self):
+        feedback = []
+        self.panel.task_feedback.connect(feedback.append)
+        self.panel.result.clear()
+        with patch.object(QApplication, "clipboard") as clipboard:
+            self.panel.copy.click()
+            clipboard.return_value.setText.assert_not_called()
+        self.assertEqual(feedback, [])
+        self.assertEqual(self.panel.copy.text(), "결과 복사")
+        self.assertIn("복사할 결과가 없어요", self.panel.status.text())
 
     def test_copy_acknowledges_exact_nonempty_text_without_geometry_or_focus_change(self):
         value = "QA_COPY <plain>\n[빈칸 이름]"

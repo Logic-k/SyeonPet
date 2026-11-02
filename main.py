@@ -553,9 +553,15 @@ def main() -> int:
     # and the normal event loop has started processing events.
     QTimer.singleShot(0, updater_switch.notify_ready)
 
-    if cfg.get("start_onboarding_on_launch", False):
-        # Do not start an automatic tour after the user explicitly put 션 to sleep.
-        QTimer.singleShot(1200, lambda: None if behavior.fully_asleep else tour.start())
+    if cfg.get("start_onboarding_on_launch", False) and settings.value("onboarding_seen") is None:
+        # The tour owns the pet until 다음/완료 is pressed, so start it by
+        # itself only once; the menu can replay it. Do not start it after the
+        # user explicitly put 션 to sleep.
+        def start_first_tour():
+            if not behavior.fully_asleep:
+                save_preference("onboarding_seen", True)
+                tour.start()
+        QTimer.singleShot(1200, start_first_tour)
 
     exit_code = app.exec()
     motion_preference.changed.disconnect(apply_motion_preference)

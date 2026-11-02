@@ -11,13 +11,17 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBo
                                QLayout, QLineEdit, QMessageBox, QPushButton, QSizePolicy,
                                QSpacerItem, QTextEdit, QToolButton, QVBoxLayout, QWidget)
 
-from optimizer_core import TASKS, create_offline_prompt, review_result, validate_input
+from optimizer_core import TASKS, create_offline_prompt, review_result, utf16_length, validate_input
 from optimizer_ai import optimize_ai
 
 _FIRST_REQUEST_EXAMPLE = "예: 연수 안내문 작성, 날짜는 [확인 필요]"
 _FOLLOWUP_EXAMPLE = "예: 위 내용을 세 항목으로 나눠 주세요."
 _PLACEHOLDER = re.compile(r"\[([^\[\]\n]{2,40})\]")
 _MAX_FILL_FIELDS = 8
+# Applied answers use Korean labels: each label is also a clue word, so the same
+# question is not offered again.
+_CONDITION_LABELS = {"purpose": "목적", "audience": "대상", "format": "형식", "deadline": "기한"}
+_ROLE_HEADING = "확정된 문의·답변 역할 (사용자 확인):"
 # After a failed AI request, offer the other fixed service. Sending still goes
 # through the normal per-request transmission confirmation.
 _OTHER_AI = {"vireonix": ("pollinations-classic", "Pollinations Classic으로 보내기"),
@@ -26,6 +30,11 @@ _OTHER_AI = {"vireonix": ("pollinations-classic", "Pollinations Classic으로 �
 _JARVIS_NOTICE = ("JarvisClaw는 외부 모델 제공자에게 요청을 전달할 수 있고 일부 이용 메타데이터를 "
                   "처리할 수 있습니다. 개인정보와 비공개 자료를 보내지 마세요. "
                   "기관 사용 승인을 확인해 주세요. 개인정보 처리방침: https://api.jarvisclaw.ai/privacy-policy")
+# Reading profiles can touch DPAPI secrets or account status. A failure inside
+# these Qt slots must look like a notice, never like a dead button or a traceback
+# on a pythonw stderr that nobody sees.
+_SETTINGS_ERROR = ("AI 연결 설정이나 계정 정보를 읽지 못해 요청을 시작하지 않았어요. "
+                   "잠시 후 다시 시도하고, 계속되면 AI 설정을 확인해 주세요.")
 
 
 def _safe_generation_error(exc):
@@ -258,12 +267,14 @@ class PromptConversation(QWidget):
                 padding: 2px 4px; }
             QWidget#promptConversation > QToolButton:hover { background: #e2edf4; }
             QWidget#promptConversation > QToolButton:focus { border: 1px solid #195b83; }
+            QWidget#promptConversation > QToolButton:disabled { color: #526a79; }
             QWidget#fillPanel { background: #eaf1f6; border: 1px solid #c4d3dd; border-radius: 4px; }
             QWidget#fillPanel QLabel { color: #172b3a; }
             QWidget#fillPanel QLineEdit { background: #ffffff; color: #172b3a; border: 1px solid #9aaebc;
                 border-radius: 3px; padding: 2px 4px; selection-background-color: #195b83;
                 selection-color: #ffffff; }
             QWidget#fillPanel QLineEdit:focus { border: 2px solid #195b83; padding: 1px 3px; }
+            QWidget#fillPanel QLineEdit:disabled { background: #e9eef2; color: #425a6a; border-color: #afbec8; }
             QWidget#fillPanel QPushButton { background: #ffffff; color: #172b3a;
                 border: 1px solid #8fa5b4; border-radius: 4px; padding: 4px 7px; }
             QWidget#fillPanel QPushButton:hover { background: #e6f0f6; }
@@ -454,11 +465,11 @@ class PromptConversation(QWidget):
         layout.addLayout(row)
         layout.addWidget(self.provider_note)
         row = _ActionRow()
-        task_label = QLabel("작업")
+        task_label = QLabel("작업 유형")
         task_label.setBuddy(self.task)
         row.addWidget(task_label)
         row.addWidget(self.task, 1)
-        detail_label = QLabel("상세")
+        detail_label = QLabel("상세 수준")
         detail_label.setBuddy(self.detail)
         row.addWidget(detail_label)
         row.addWidget(self.detail, 1)
@@ -661,11 +672,24 @@ class PromptConversation(QWidget):
                     raise ValueError("먼저 요청 또는 추가 조건을 입력하세요.")
                 labels = [self._destination(value) for value in destinations]
                 profiles = [self._resolve_profile(value) for value in destinations]
-                expected = self._request_snapshot()
-                frozen = self._generation_input(text)
             except ValueError as exc:
                 self._show_notice(str(exc))
                 return
+            try:
+                expected = self._request_snapshot()
+            except (OSError, ValueError):
+                self._show_notice(_SETTINGS_ERROR)
+                return
+            frozen = self._generation_input(text)
+            # Both compared requests share this frozen input; each is capped by
+            # the same limits as its own worker, before anything is sent.
+            for destination in destinations:
+                over = self._over_limit(frozen[1], frozen[2],
+                                        frozen[3] if destination != "offline" else frozen[4],
+                                        frozen[5], destination)
+                if over:
+                    self._show_notice(over)
+                    return
             dialog.accept()
             body = ("같은 입력으로 순서대로 2회 요청합니다.\nA: " + labels[0] + "\nB: " + labels[1]
                     + "\n로컬 정리와 외부 전송을 구분해 확인하세요. B에는 A의 결과를 보내지 않습니다.")
@@ -676,7 +700,7 @@ class PromptConversation(QWidget):
             if isinstance(confirmation, QMessageBox):
                 confirmation.setDetailedText(
                     f"원문:\n{frozen[1]}\n\n누적 조건:\n{frozen[3]}\n\n추가 조건:\n{frozen[2]}"
-                    f"\n\n이전 결과:\n{frozen[5]}\n\n작업: {frozen[6]}\n상세: {frozen[7]}")
+                    f"\n\n이전 결과:\n{frozen[5]}\n\n작업 유형: {frozen[6]}\n상세 수준: {frozen[7]}")
                 confirmation.finished.connect(lambda _: confirmation.setDetailedText(""))
         start.clicked.connect(begin)
         self._comparison_dialog = dialog
@@ -694,6 +718,31 @@ class PromptConversation(QWidget):
         pending = [*self.revisions[count:], revision] if revision else []
         return (text, original, revision, old_context, next_context, previous,
                 self.task.currentData(), self.detail.currentData(), pending)
+
+    def _over_limit(self, original, revision, context, previous, provider):
+        """Return the first limit the worker would reject, before any consent.
+
+        Mirrors optimizer_ai._validate for AI requests and validate_input for
+        the offline formatter, in the same order. Both return one fixed notice
+        so no request text can reach the user as an exception message.
+        """
+        if utf16_length(original) > 30000:
+            return ("원래 요청이 30,000자를 넘어 정리할 수 없어요. "
+                    "요청을 나누거나 일부를 지운 뒤 새 요청으로 시작해 주세요.")
+        if utf16_length(context) > 2000:
+            return ("추가 조건이 2,000자를 넘어 정리할 수 없어요. "
+                    "조건 확인에서 일부를 지우거나 새 요청으로 나눠 주세요.")
+        if provider == "offline":
+            # The offline formatter only checks the request and the context it
+            # receives, which already contains this revision.
+            return None
+        if utf16_length(revision) > 2000:
+            return ("이번 수정 요청이 2,000자를 넘어 정리할 수 없어요. "
+                    "요청을 나누거나 일부를 지운 뒤 다시 보내 주세요.")
+        if utf16_length(previous) > 30000:
+            return ("이전 결과가 30,000자를 넘어 정리할 수 없어요. "
+                    "결과를 줄이거나 새 요청으로 시작해 주세요.")
+        return None
 
     @staticmethod
     def _generate(frozen, destination, profile=None):
@@ -817,10 +866,24 @@ class PromptConversation(QWidget):
                 self._show_notice("입력이 바뀌었습니다. 조건을 다시 확인해 주세요.")
                 dialog.reject()
                 return
-            additions = [f"{key}: {field.text().strip()}" for key, field in answers.items()
-                         if field.text().strip()]
+            additions = []
+            for key, field in answers.items():
+                value = field.text().strip()
+                if not value:
+                    continue
+                if key == "inquiry_roles":
+                    # A user-confirmed role keeps its own labelled block so the
+                    # model can prefer it over roles inferred from the original.
+                    additions.append(_ROLE_HEADING + "\n" + value)
+                else:
+                    additions.append(f"{_CONDITION_LABELS.get(key, key)}: {value}")
             if additions:
-                self._clarifications = "\n".join(filter(None, [self._clarifications, *additions]))
+                candidate = "\n".join(filter(None, [self._clarifications, *additions]))
+                if utf16_length(candidate) > 2000:
+                    self._show_notice("추가한 조건이 2,000자를 넘어 적용하지 않았어요. "
+                                      "조건 확인에서 일부를 지운 뒤 다시 적용해 주세요.")
+                    return
+                self._clarifications = candidate
             dialog.accept()
         buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(apply)
         buttons.rejected.connect(dialog.reject)
@@ -1071,22 +1134,24 @@ class PromptConversation(QWidget):
 
     def _copy_result(self):
         value = self.result.toPlainText()
-        if value:
-            self._reset_copy()
-            clipboard = QApplication.clipboard()
-            try:
-                clipboard.setText(value)
-                copied = clipboard.text().replace("\r\n", "\n") == value.replace("\r\n", "\n")
-            except RuntimeError:
-                copied = False
-            if not copied:
-                self.status.setText("복사하지 못했어요. 다시 시도해 주세요.")
-                return
-            self.copy.setText("복사됨")
-            remaining = len(_placeholders(value))
-            self.status.setText("결과를 복사했어요. 원문과 조건을 확인한 뒤 사용해 주세요."
-                                + (f" 아직 채우지 않은 [대괄호] 칸이 {remaining}개 있어요." if remaining else ""))
-            self.task_feedback.emit("copied")
+        if not value:
+            self.status.setText("복사할 결과가 없어요. 먼저 정리를 하거나 결과를 직접 작성해 주세요.")
+            return
+        self._reset_copy()
+        clipboard = QApplication.clipboard()
+        try:
+            clipboard.setText(value)
+            copied = clipboard.text().replace("\r\n", "\n") == value.replace("\r\n", "\n")
+        except RuntimeError:
+            copied = False
+        if not copied:
+            self.status.setText("복사하지 못했어요. 다시 시도해 주세요.")
+            return
+        self.copy.setText("복사됨")
+        remaining = len(_placeholders(value))
+        self.status.setText("결과를 복사했어요. 원문과 조건을 확인한 뒤 사용해 주세요."
+                            + (f" 아직 채우지 않은 [대괄호] 칸이 {remaining}개 있어요." if remaining else ""))
+        self.task_feedback.emit("copied")
 
     def _new_request(self):
         if self._busy:
@@ -1288,7 +1353,9 @@ class PromptConversation(QWidget):
 
         self._reset_copy()
         self.original = state["original"]
-        self._clarifications = state.get("clarifications", "")
+        # Older snapshots kept an applied role answer under an ASCII key.
+        self._clarifications = re.sub(r"(?m)^inquiry_roles:[ \t]*", _ROLE_HEADING + "\n",
+                                      state.get("clarifications", ""))
         self.revisions = list(state["revisions"])
         self.results = list(state["results"])
         self._result_revision_counts = list(counts)
@@ -1376,6 +1443,14 @@ class PromptConversation(QWidget):
         count = (self._result_revision_counts[self._shown_result]
                  if 0 <= self._shown_result < len(self._result_revision_counts) else 0)
         pending_revisions = [*self.revisions[count:], revision] if revision else []
+        # Every limit the worker enforces is checked before consent, so a
+        # request is never refused only after the user agrees to send it.
+        over = self._over_limit(original, revision,
+                                old_context if provider != "offline" else next_context,
+                                previous, provider)
+        if over:
+            self._show_notice(over)
+            return
         if provider != "offline":
             service = self._destination(provider)
             info = (f"원래 요청, 추가 조건과 이전 결과를 {service}에 전송합니다. "
@@ -1387,13 +1462,19 @@ class PromptConversation(QWidget):
                         + _JARVIS_NOTICE + "\n\n전송하시겠어요?")
             if profile is not None and profile.provider == "ollama":
                 info = f"{service} 로컬 서버에서 원래 요청, 추가 조건과 이전 결과를 처리합니다. 로컬 처리를 시작할까요?"
-            expected = self._request_snapshot()
+            try:
+                expected = self._request_snapshot()
+            except Exception:
+                # A profile or credential lookup can fail (OS error, unreadable
+                # secret). Report it instead of dying inside a Qt slot.
+                self._show_notice("연결 설정을 읽지 못했어요. AI 연결 설정을 다시 확인해 주세요.")
+                return
             dialog = self._confirm("로컬 AI 처리 확인" if profile is not None and profile.provider == "ollama" else "외부 AI 전송 확인", info,
                           lambda: self._submit_if_unchanged(expected, text, original, revision, provider, old_context, next_context, previous, task, detail, pending_revisions, profile))
             if isinstance(dialog, QMessageBox):
                 dialog.setTextFormat(Qt.TextFormat.PlainText)
                 dialog.setDetailedText(
-                    f"서비스: {service}\n작업: {self.task.currentText()} ({task})\n"
+                    f"서비스: {service}\n작업 유형: {self.task.currentText()} ({task})\n"
                     f"상세 수준: {self.detail.currentText()} ({detail})\n\n"
                     f"원래 요청:\n{original}\n\n누적 조건:\n{old_context}\n\n"
                     f"이번 추가 조건:\n{revision}\n\n선택한 이전 결과 (편집 반영):\n{previous}\n\n"

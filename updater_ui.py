@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from update_trust import PUBLIC_KEY_BYTES
 from version import APP_VERSION
 
 _MAX_DRAFT_BYTES = 20 * 1024 * 1024
+_RESTORED_RETENTION_SECONDS = 7 * 24 * 3600
 
 
 class UpdatePreparer(QObject):
@@ -54,14 +56,38 @@ class UpdatePreparer(QObject):
                     APP_VERSION, updater_switch.state_directory(self.install_root),
                     PUBLIC_KEY_BYTES)
                 if result['status'] in ('ready', 'already_ready'):
+                    not_queued = ('새 버전을 업데이트 대기열에 넣지 않았어요. '
+                                  '기존 션은 계속 사용할 수 있어요.')
                     with self._lock:
-                        if not self._shutting_down:
-                            updater_switch.queue_update(self.install_root, result['version'],
-                                                        current_version=APP_VERSION)
-                        result['version'] = updater_switch.pending_version(self.install_root) or result['version']
-                    result['status'] = 'ready'
-                    result['message'] = (f"새 버전 {result['version']}을 준비했어요. "
-                                         "션을 종료하고 다시 실행하면 적용됩니다.")
+                        if self._shutting_down:
+                            result['status'] = 'shutting_down'
+                            result['message'] = ('션을 종료하는 중이라 이번에는 새 버전을 준비하지 않았어요. '
+                                                 '기존 션은 계속 사용할 수 있어요.')
+                        else:
+                            try:
+                                queued = updater_switch.queue_update(
+                                    self.install_root, result['version'],
+                                    current_version=APP_VERSION)
+                            except updater_switch.SwitchError:
+                                # A broken staging directory must not crash the tray.
+                                queued = None
+                            if queued:
+                                result['status'] = 'ready'
+                                result['message'] = (f"새 버전 {result['version']}을 준비했어요. "
+                                                     "션을 종료하고 다시 실행하면 적용됩니다.")
+                            elif queued is None:
+                                result['status'] = 'unavailable'
+                                result['message'] = not_queued
+                            else:
+                                pending = updater_switch.pending_version(self.install_root)
+                                if pending:
+                                    result['status'] = 'ready'
+                                    result['version'] = pending
+                                    result['message'] = (f"새 버전 {pending}은 이미 준비되어 있어요. "
+                                                         "션을 종료하고 다시 실행하면 적용됩니다.")
+                                else:
+                                    result['status'] = 'unavailable'
+                                    result['message'] = not_queued
                 else:
                     result['message'] = '현재 버전이 최신입니다.'
             except updater_core.UpdateError as exc:
@@ -131,6 +157,8 @@ class RestartDrafts:
 
     The original is retained even after restoration, so a failed candidate can
     be retried by the previous version without deleting the user's words.
+    Restored copies older than ``_RESTORED_RETENTION_SECONDS`` are pruned so
+    plaintext snapshots cannot accumulate on a machine that updates often.
     """
 
     def __init__(self, install_root):
@@ -187,6 +215,9 @@ class RestartDrafts:
                 data = json.loads(path.read_text(encoding='utf-8'))
                 visible = panel.restore_update_state(data)
                 self._claimed, self._lock = path, lock
+                # The snapshot this session owns is still *.json, so pruning the
+                # retained copies here cannot touch the current rollback file.
+                self.prune_restored()
                 return visible
             except Exception:
                 lock.close()
@@ -203,6 +234,27 @@ class RestartDrafts:
         finally:
             self._lock.close()
             self._claimed = self._lock = None
+
+    def prune_restored(self, now=None):
+        """Delete retained snapshots past retention; startup must never fail."""
+        if not self.directory.exists() or self.directory.is_symlink():
+            return 0
+        moment = time.time() if now is None else now
+        removed = 0
+        for path in self.directory.glob('*.restored'):
+            if (path.is_symlink() or path == self._claimed
+                    or len(path.stem) != 32
+                    or any(c not in '0123456789abcdef' for c in path.stem)):
+                continue
+            try:
+                if moment - path.stat().st_mtime <= _RESTORED_RETENTION_SECONDS:
+                    continue
+                path.unlink()
+            except OSError:
+                # A locked or already removed backup must not stop the start.
+                continue
+            removed += 1
+        return removed
 
     def remaining_count(self):
         if not self.directory.exists():

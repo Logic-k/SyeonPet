@@ -13,7 +13,7 @@ from PySide6.QtCore import QEventLoop, QSettings, QTimer
 from PySide6.QtWidgets import QApplication, QDialog
 
 from ai_profiles import AIProfile, ModelInfo
-from ai_settings import AISettingsDialog
+from ai_settings import AISettingsDialog, fit_size
 from chatgpt_auth import AccountInfo
 
 
@@ -295,6 +295,31 @@ class AISettingsTests(unittest.TestCase):
             self.wait_idle()
         self.assertTrue(self.dialog.status.text())
         self.mocks[1].assert_not_called()
+
+    def test_fit_size_clamps_default_and_oversized_sizes_to_the_work_area(self):
+        from PySide6.QtCore import QRect
+        self.assertEqual(fit_size(490, 580, QRect(0, 0, 320, 240)), (304, 224))
+        self.assertEqual(fit_size(2000, 2000, QRect(0, 0, 320, 240)), (304, 224))
+        self.assertEqual(fit_size(490, 580, QRect(0, 0, 800, 600)), (490, 580))
+        # A work area narrower than the margin still yields a usable size.
+        self.assertEqual(fit_size(490, 580, QRect(0, 0, 10, 10)), (1, 1))
+
+    def test_clamping_is_skipped_without_a_screen_and_retried_when_one_arrives(self):
+        dialog = AISettingsDialog()
+        self.addCleanup(dialog.reject)
+        dialog.resize(2000, 2000)
+
+        self.assertFalse(dialog._fit_to_screen(None))
+        self.assertFalse(getattr(dialog, "_fitted_to_screen", False))
+        self.assertEqual((dialog.width(), dialog.height()), (2000, 2000))
+
+        screen = dialog.screen()
+        if screen is None:
+            self.skipTest("offscreen platform exposes no screen object")
+        bounds = screen.availableGeometry()
+        self.assertTrue(dialog._fit_to_screen(screen))
+        self.assertLessEqual(dialog.width(), max(1, bounds.width() - 16))
+        self.assertLessEqual(dialog.height(), max(1, bounds.height() - 16))
 
 
 if __name__ == "__main__":

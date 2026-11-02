@@ -12,6 +12,16 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 
+# Keep a few pixels free for native frame rounding and display scaling.
+SCREEN_MARGIN = 16
+
+
+def fit_size(width, height, bounds):
+    """Clamp a window size to a work area, never collapsing below a pixel."""
+    return (max(1, min(width, bounds.width() - SCREEN_MARGIN)),
+            max(1, min(height, bounds.height() - SCREEN_MARGIN)))
+
+
 class _SettingsSignals(QObject):
     finished = Signal(object)
 
@@ -131,6 +141,28 @@ class AISettingsDialog(QDialog):
         self._last_provider = self.provider.currentData()
         self._reload_accounts()
         self._provider_changed()
+
+    def _fit_to_screen(self, screen):
+        """Clamp to this screen's work area; False when no screen is resolved.
+
+        A small work area must still leave the save/cancel row reachable; the
+        inner scroll area absorbs the height that is cut off.
+        """
+        if screen is None:
+            return False
+        width, height = fit_size(self.width(), self.height(),
+                                 screen.availableGeometry())
+        self.resize(width, height)
+        return True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_fitted_to_screen", False):
+            return
+        # The screen is not resolved yet on the first show; clamping is
+        # retried on the next show instead of being given up permanently.
+        if self._fit_to_screen(self.screen()):
+            self._fitted_to_screen = True
 
     @property
     def is_busy(self):

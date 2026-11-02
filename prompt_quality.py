@@ -66,7 +66,7 @@ def missing_conditions(prompt: str, context: str = "") -> list[MissingCondition]
     # not an inquiry. An explicitly applied answer is not requested again.
     if (re.search(r"문의(?![ \t]*(?:처|전화|번호|메일|이메일))|질의|민원", text)
             and re.search(r"답변|회신", text)
-            and not re.search(r"(?m)^inquiry_roles:\s*\S", context)):
+            and not re.search(r"(?m)^(?:inquiry_roles|확정된 문의·답변 역할 \(사용자 확인\)):[ \t]*(?:\r?\n[ \t]*)?\S", context)):
         hints.append({"field": "inquiry_roles",
                       "question": "문의·답변 역할 (미정 가능)"})
     return hints

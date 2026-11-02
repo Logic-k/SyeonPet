@@ -191,6 +191,45 @@ class CompanionTests(unittest.TestCase):
             cfg["click_actions"]["double_click"] = "invalid-config-action"
             self.assertEqual(main.load_pet_preferences(settings, cfg)["double_click"], "sleep")
 
+    def test_launch_tour_starts_by_itself_only_on_first_run(self):
+        # The tour holds the pet still until 다음/완료, so a tour on every
+        # launch looked like a pet that no longer moved.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = str(Path(temporary) / "pet.ini")
+            starts = []
+            def launch():
+                shots = []
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(main, "QApplication", return_value=self.app))
+                    stack.enter_context(patch.object(main, "load_config", return_value={
+                        "start_onboarding_on_launch": True, "ambient_chatter": False,
+                        "onboarding_steps": [{"text": "hello"}]}))
+                    stack.enter_context(patch.object(main, "QSettings", side_effect=lambda *args: QSettings(path, QSettings.Format.IniFormat)))
+                    stack.enter_context(patch.object(main, "QSystemTrayIcon"))
+                    stack.enter_context(patch.object(main, "UpdatePreparer"))
+                    drafts = stack.enter_context(patch.object(main, "RestartDrafts"))
+                    drafts.return_value.restore.return_value = False
+                    drafts.return_value.remaining_count.return_value = 0
+                    stack.enter_context(patch.object(main, "autostart_enabled", return_value=False))
+                    stack.enter_context(patch.object(main.OnboardingTour, "start",
+                                                     side_effect=lambda: starts.append(True)))
+                    stack.enter_context(patch.object(main.QTimer, "singleShot",
+                                                     side_effect=lambda ms, callback: shots.append((ms, callback))))
+                    stack.enter_context(patch.object(self.app, "exec", return_value=0))
+                    self.assertEqual(main.main(), 0)
+                    for ms, callback in shots:
+                        if ms == 1200:
+                            callback()
+                for timer in self.app.findChildren(FocusTimer):
+                    timer.setParent(None)
+                    timer.deleteLater()
+                self.app.closeAllWindows()
+                self.app.processEvents()
+            launch()
+            self.assertEqual(len(starts), 1)
+            launch()
+            self.assertEqual(len(starts), 1)
+
     def test_runtime_signal_timer_and_preference_restart_integration(self):
         # Exercise real main wiring, pet, menu, prompt and QSettings. Only
         # external update/draft surfaces and the outer event loop are isolated.

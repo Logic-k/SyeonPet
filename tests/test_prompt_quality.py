@@ -64,6 +64,16 @@ class MissingConditionTests(unittest.TestCase):
         self.assertIn("inquiry_roles", {h["field"] for h in
                       missing_conditions(prompt, "inquiry_roles: ")})
 
+    def test_applied_role_block_with_a_value_is_not_asked_again(self):
+        prompt = "학교 문의에 대한 회신 초안을 작성해 줘."
+        context = "확정된 문의·답변 역할 (사용자 확인):\n문의자: 학교 / 답변자: 교육청"
+        self.assertNotIn("inquiry_roles", {h["field"] for h in missing_conditions(prompt, context)})
+
+    def test_applied_role_block_heading_without_a_value_is_asked_again(self):
+        prompt = "학교 문의에 대한 회신 초안을 작성해 줘."
+        context = "확정된 문의·답변 역할 (사용자 확인):"
+        self.assertIn("inquiry_roles", {h["field"] for h in missing_conditions(prompt, context)})
+
 
 class LiteralDiffTests(unittest.TestCase):
     def test_unicode_replacement_uses_python_offsets(self):

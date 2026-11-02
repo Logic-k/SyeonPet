@@ -35,6 +35,8 @@ class SpeechBubble(QWidget):
                 " border-radius: 6px; padding: 3px 10px; font-size: 12px; }"
                 "QPushButton:hover { background: #fff6ea; }")
         self.btn_prev.setFixedWidth(34)
+        self.btn_prev.setAccessibleName("이전 안내")
+        self.btn_prev.setToolTip("이전 안내로 돌아갑니다")
         self.btn_prev.clicked.connect(self.prev_clicked)
         self.btn_next.clicked.connect(self.next_clicked)
         self.btn_skip.clicked.connect(self.skip_clicked)

@@ -21,6 +21,8 @@ class BehaviorController(QObject):
     WALK_SPEED_SLOW = 80
     WALK_RAMP_SECONDS = 0.25
     THINKING_MIN_SECONDS = 0.8
+    AUTO_NAP_SECONDS = (60.0, 120.0)  # lying-down part of a self-chosen nap
+    AUTO_NAP_SECONDS_SLOW = (120.0, 240.0)
     fully_asleep_changed = Signal(bool)
 
     def __init__(self, pet: PetWidget):
@@ -41,6 +43,9 @@ class BehaviorController(QObject):
         self._transition_to: dict | None = None
         self._deep_state = "liesleep"
         self._fully_asleep = False
+        # Sleep the pet chose for itself ends on its own; sleep the user asked
+        # for (menu, double click) still lasts until the user wakes it.
+        self._auto_nap = False
         self._pre_fall_mode = "idle"
         self._pre_drag_state = "idle"
         # A request may be interrupted by a user action.  Only restore the
@@ -389,6 +394,7 @@ class BehaviorController(QObject):
         self.reset_walk()
         self._interrupt_thinking()
         self._set_fully_asleep(False)
+        self._auto_nap = False
         self.idle_ticks = 0
         rising_to_sit = source in ("liesleep", "still") or (
             source == "wake_bridge" and source_frame <= 3) or (
@@ -402,18 +408,24 @@ class BehaviorController(QObject):
                        start_frame=start_frame,
                        end_frame=3 if bridge == "wake_bridge" else 2)
 
-    def deep_sleep(self):
-        """Lying-down sleep — stays put, no wander, until woken."""
+    def deep_sleep(self, *, nap: bool = False):
+        """Lying-down sleep — stays put, no wander, until woken.
+
+        A self-chosen nap (`nap`) wakes on its own after AUTO_NAP_SECONDS.
+        """
         self._interrupt_thinking()
         self.reset_walk()
         self._set_fully_asleep(False)
+        self._auto_nap = nap
         self.idle_ticks = 0
         self._deep_state = "liesleep"
         source = self.pet.state
         start_frame = (3 if source == "sleep" else
                        5 - self.pet.frame_idx if source == "wake_bridge" else
                        self.pet.frame_idx if source == "sleep_bridge" else 0)
+        low, high = self.AUTO_NAP_SECONDS_SLOW if self.slow else self.AUTO_NAP_SECONDS
         self._set_pose("deepsleep", "liesleep",
+                       seconds=random.uniform(low, high) if nap else None,
                        bridge="sleep_bridge" if source not in ("liesleep", "still") else None,
                        start_frame=start_frame)
 
@@ -421,6 +433,7 @@ class BehaviorController(QObject):
         """Completely motionless flop — nothing moves until woken."""
         self._interrupt_thinking()
         self.reset_walk()
+        self._auto_nap = False
         self.mode = "deepsleep"
         self.idle_ticks = 0
         self._deep_state = "still"
@@ -545,7 +558,9 @@ class BehaviorController(QObject):
         if self.fully_asleep:
             self.still_sleep()
         elif self._pre_fall_mode == "sleep":
+            nap = self._auto_nap
             self.sleep()
+            self._auto_nap = nap
         elif self._pre_fall_mode == "deepsleep":
             self.mode = "deepsleep"
             self.pet.set_state(self._deep_state)
@@ -603,6 +618,7 @@ class BehaviorController(QObject):
             if self.idle_ticks >= 4 and random.random() < 0.45:
                 self.idle_ticks = 0
                 self.sleep()
+                self._auto_nap = True
             elif random.random() < 0.18:
                 self.play_one_shot("jump")
             else:
@@ -617,7 +633,10 @@ class BehaviorController(QObject):
             self.idle()
 
         elif self.mode == "sleep" and now >= self.mode_until:
-            self.deep_sleep()
+            self.deep_sleep(nap=self._auto_nap)
+
+        elif self.mode == "deepsleep" and self._auto_nap and now >= self.mode_until:
+            self.wake()
 
         elif self.mode.startswith("oneshot:") and pet.one_shot_finished():
             nxt = self.mode.split(":", 1)[1]

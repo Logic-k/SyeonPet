@@ -33,6 +33,12 @@ class OfflinePromptTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "2,000"):
             create_offline_prompt("요청", "😀" * 1001)
 
+    def test_offline_prompt_prefers_a_user_confirmed_role_block(self):
+        result = create_offline_prompt("가상 학교가 문의한 회신 초안을 작성해 줘.",
+                                       "확정된 문의·답변 역할 (사용자 확인):\n문의자: 가상 학교")
+        self.assertIn("다만 '확정된 문의·답변 역할 (사용자 확인)' 블록의 역할은 사용자가 확인한 값이므로 "
+                      "원문을 해석한 역할보다 우선합니다.", result["result"])
+
     def test_rejects_invalid_inputs(self):
         for kwargs in ({"prompt": "  "}, {"prompt": None}, {"prompt": "x", "task": "other"},
                        {"prompt": "x", "detail": "other"}, {"prompt": "x", "context": None}):

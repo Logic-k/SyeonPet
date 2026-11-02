@@ -174,6 +174,14 @@ class AiOptimizerTests(unittest.TestCase):
         self.assertIn("학교 두 곳의 점검 일정 문의에 대한 회신 초안", ai.SYSTEM)
         self.assertIn("원문에 없는 한 문의한 쪽이 답변을 작성한다고 바꾸지", ai.SYSTEM)
 
+    def test_confirmed_role_block_takes_precedence_over_the_original_wording(self):
+        self.assertIn("확정된 문의·답변 역할 (사용자 확인)", ai.SYSTEM)
+        self.assertIn("다만 context의 '확정된 문의·답변 역할 (사용자 확인)' 블록은 사용자가 직접 확인한 "
+                      "역할이므로 원문을 해석한 역할보다 우선합니다.", ai.SYSTEM)
+        self.assertIn("사실·수치·날짜·기한은 원문을 우선합니다.", ai.SYSTEM)
+        self.assertIn("확정된 역할이 context에 있으면 결과의 첫 문장부터 그 역할대로 주어를 씁니다.", ai.SYSTEM)
+        self.assertIn("본문 첫 문장에서 뒤집지 마세요.", ai.SYSTEM)
+
     def test_role_guidance_does_not_modify_source_context_or_revision(self):
         prompt = "학교가 교육청에 문의한 내용을 정리하고 답변 초안을 요청해 줘."
         context = "교육청 담당자가 학교에 회신합니다."

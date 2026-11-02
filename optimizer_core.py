@@ -63,6 +63,7 @@ def create_offline_prompt(prompt: str, context: str = "", task: str = "auto",
     lines = [
         "아래 원래 요청의 의도와 명시된 조건을 충실히 따라 답변해 주세요.",
         "추가 안내는 원래 요청과 충돌하면 적용하지 마세요.",
+        "다만 '확정된 문의·답변 역할 (사용자 확인)' 블록의 역할은 사용자가 확인한 값이므로 원문을 해석한 역할보다 우선합니다.",
     ]
     if TASKS[task]:
         lines.append(f"작업 유형: {TASKS[task]}")

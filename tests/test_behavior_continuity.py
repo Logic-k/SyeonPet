@@ -79,6 +79,35 @@ class BehaviorContinuityTests(unittest.TestCase):
         self.finish_bridge()
         self.assertEqual((self.behavior.mode, self.pet.state), ("deepsleep", "liesleep"))
 
+    def test_self_chosen_nap_wakes_by_itself_but_requested_sleep_stays(self):
+        self.install_bridges()
+        self.behavior.mode, self.behavior.mode_until, self.behavior.idle_ticks = "idle", 0, 3
+        with patch("behavior.random.random", return_value=0.0):
+            self.behavior._tick()
+        self.assertTrue(self.behavior._auto_nap)
+        self.pet._advance_frame(300)
+        self.behavior._tick()
+        self.behavior.mode_until = 0
+        self.behavior._tick()
+        self.finish_bridge()
+        self.assertEqual((self.behavior.mode, self.pet.state), ("deepsleep", "liesleep"))
+        self.assertGreater(self.behavior.mode_until, 0)
+        self.behavior.mode_until = 0
+        self.behavior._tick()
+        self.assertFalse(self.behavior.sleeping)
+        self.assertEqual(self.pet.state, "wake_bridge")
+        # A double click or the menu asks for sleep: no timer ends it.
+        for request in (self.behavior.sleep, self.behavior.deep_sleep):
+            request()
+            self.behavior.mode_until = 0
+            for _ in range(3):
+                if self.behavior.mode.startswith("transition:"):
+                    self.finish_bridge()
+                self.behavior.mode_until = 0
+                self.behavior._tick()
+            self.assertEqual((self.behavior.mode, self.pet.state), ("deepsleep", "liesleep"))
+            self.assertTrue(self.behavior.sleeping)
+
     def test_wake_click_rises_before_wave_and_a_new_action_cancels_the_queue(self):
         self.install_bridges()
         self.behavior.still_sleep()
