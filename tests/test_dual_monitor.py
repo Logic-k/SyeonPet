@@ -99,6 +99,15 @@ class DualMonitorTests(unittest.TestCase):
         self.assertTrue(any(x >= 1920 for x in targets),
                         "wander never reaches the second monitor")
 
+    def test_single_monitor_uses_only_that_screen(self):
+        # Multi-monitor paths engage only when a second screen exists.
+        self.screens[:] = [self.left]
+        self.gui.screens.return_value = self.screens
+        bounds = self.pet.screen_bounds()
+        self.assertEqual(bounds, QRect(0, 0, 1920, 1040))
+        self.pet.move(400, 0)
+        self.assertEqual(self.pet.ground_y(), LEFT_FLOOR)
+
     def test_negative_origin_monitor_is_inside_bounds(self):
         # Second monitor positioned left of the primary (negative x origin).
         self.screens[1] = mock_screen(QRect(-1920, 0, 1920, 1040))

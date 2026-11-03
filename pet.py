@@ -409,14 +409,14 @@ class PetWidget(QWidget):
         return self._screen_at_pet().availableGeometry().bottom()
 
     def screen_bounds(self):
-        """Union of every monitor's work area — the pet may roam across screens."""
+        """Roam across monitors only when more than one is actually attached."""
         screens = QGuiApplication.screens()
-        if not screens:
-            return QGuiApplication.primaryScreen().availableGeometry()
-        bounds = QRect()
-        for s in screens:
-            bounds = bounds.united(s.availableGeometry())
-        return bounds
+        if len(screens) > 1:
+            bounds = QRect()
+            for s in screens:
+                bounds = bounds.united(s.availableGeometry())
+            return bounds
+        return self._screen_at_pet().availableGeometry()
 
     def current_screen_bounds(self):
         """Work area of just the monitor under the pet (anchors, y clamping)."""
