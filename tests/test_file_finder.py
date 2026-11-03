@@ -24,7 +24,6 @@ from syeonpet.finder import (
     parse_natural_query,
     safe_open_or_reveal,
     search,
-    search_everything_fallback,
 )
 
 

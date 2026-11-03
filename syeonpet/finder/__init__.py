@@ -9,7 +9,6 @@ from .index_engine import (
     is_safe_to_open,
     safe_open_or_reveal,
     search,
-    search_everything_fallback,
 )
 from .query_parser import ParsedQuery, extract_choseong, parse_natural_query
 
@@ -25,5 +24,4 @@ __all__ = [
     "ParsedQuery",
     "FileFinderWidget",
     "FileFinderDialog",
-    "search_everything_fallback",
 ]

@@ -15,7 +15,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -434,25 +433,3 @@ def _record_to_dict(rec: FileRecord, score: float) -> dict:
             for v in rec.older_versions
         ],
     }
-
-
-def search_everything_fallback(query: str, limit: int = 30) -> list[dict]:
-    """Optional bridge to Voidtools Everything (es.exe) when installed."""
-    es_path = shutil.which("es.exe")
-    if not es_path or not query.strip():
-        return []
-    try:
-        proc = subprocess.run([es_path, "-n", str(limit), query.strip()], capture_output=True, text=True, timeout=3.0, check=False)
-        results = []
-        for line in [l.strip() for l in proc.stdout.splitlines() if l.strip()]:
-            p = Path(line)
-            if p.is_file():
-                results.append({
-                    "path": str(p.resolve()), "name": p.name, "stem": p.stem, "ext": p.suffix.lower(),
-                    "folder": str(p.parent), "size": p.stat().st_size, "mtime": p.stat().st_mtime,
-                    "badge": "Everything 전체 검색", "snippet": "",
-                    "is_dangerous": p.suffix.lower() in DANGEROUS_EXTENSIONS, "score": 50.0, "older_versions": [],
-                })
-        return results
-    except Exception:
-        return []
