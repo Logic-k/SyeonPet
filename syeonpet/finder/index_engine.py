@@ -31,9 +31,14 @@ DANGEROUS_EXTENSIONS = {
 DOCUMENT_EXTENSIONS = {
     ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".csv",
     ".ppt", ".pptx", ".pdf", ".txt", ".md", ".rtf", ".html", ".htm",
+    ".tsv", ".log", ".json", ".ini", ".cfg",
     ".zip", ".7z", ".rar",
     ".exe", ".bat", ".cmd", ".msi", ".ps1"
 }
+IMAGE_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".tif", ".tiff"
+}
+INDEXED_EXTENSIONS = DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS
 EXCLUDED_DIRS = {
     "appdata", "windows", "program files", "program files (x86)",
     "$recycle.bin", "node_modules", ".git", "__pycache__", ".venv", "venv",
@@ -105,10 +110,80 @@ def make_bigrams(text: str) -> set[str]:
     return {c[i:i + 2] for i in range(len(c) - 1)} if len(c) >= 2 else set()
 
 
+def _known_folder_paths() -> dict[str, Path]:
+    """Resolve Desktop/Documents/Downloads via User Shell Folders.
+
+    The registry values already point at OneDrive-redirected or Korean-named
+    folders when the user enabled known-folder backup, unlike Path.home() guesses.
+    """
+    if sys.platform != "win32":
+        return {}
+    import winreg
+    mapping = {
+        "Desktop": "Desktop",
+        "Documents": "Personal",
+        "Downloads": "{374DE290-123F-4565-9164-39C4925E467B}",
+        "Pictures": "My Pictures",
+    }
+    out: dict[str, Path] = {}
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+        ) as key:
+            for name, value_name in mapping.items():
+                try:
+                    raw, _ = winreg.QueryValueEx(key, value_name)
+                    candidate = Path(os.path.expandvars(str(raw)))
+                    if candidate.is_dir():
+                        out[name] = candidate
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
 def get_default_scan_roots() -> list[Path]:
+    """Default scan roots: shell known folders + OneDrive + KakaoTalk dirs.
+
+    Resolves Desktop/Downloads/Documents/Pictures through User Shell Folders so
+    OneDrive-redirected and Korean-named folders are covered, then adds common
+    OneDrive fallbacks and the real '카카오톡 받은 파일' locations.
+    """
     u = Path.home()
-    roots = [u / "Desktop", u / "Downloads", u / "Documents", u / "Downloads" / "KakaoTalk Downloads", u / "Documents" / "KakaoTalk Downloads"]
-    return [r for r in roots if r.exists()]
+    kf = _known_folder_paths()
+    desktop = kf.get("Desktop", u / "Desktop")
+    downloads = kf.get("Downloads", u / "Downloads")
+    documents = kf.get("Documents", u / "Documents")
+    pictures = kf.get("Pictures", u / "Pictures")
+
+    roots: list[Path] = [desktop, downloads, documents, pictures]
+
+    # KakaoTalk received-files folders (both real Korean and legacy EN names).
+    doc_bases = {documents, u / "Documents", u / "OneDrive" / "문서", u / "OneDrive" / "Documents"}
+    dl_bases = {downloads, u / "Downloads", u / "OneDrive" / "다운로드", u / "OneDrive" / "Downloads"}
+    for base in doc_bases | dl_bases:
+        for name in ("카카오톡 받은 파일", "KakaoTalk Downloads"):
+            roots.append(base / name)
+
+    # OneDrive folders that exist but are not the active shell target.
+    for od_base in {u / "OneDrive", *u.glob("OneDrive -*")}:
+        if od_base.is_dir():
+            for name in ("바탕 화면", "Desktop", "문서", "Documents", "사진", "Pictures"):
+                roots.append(od_base / name)
+
+    seen: set[str] = set()
+    resolved: list[Path] = []
+    for root in roots:
+        try:
+            key = str(root.resolve()).lower()
+        except OSError:
+            key = str(root).lower()
+        if key not in seen and root.exists():
+            seen.add(key)
+            resolved.append(root)
+    return resolved
 
 
 def get_cache_file_path() -> Path:
@@ -148,7 +223,10 @@ class FileIndex:
         raw_recs, visited = [], set()
         for root in self.roots:
             if root.exists():
-                self._scan_dir(root, raw_recs, visited, cur_depth=0)
+                # Per-root quota so one huge folder cannot starve later roots.
+                root_recs: list[FileRecord] = []
+                self._scan_dir(root, root_recs, visited, cur_depth=0)
+                raw_recs.extend(root_recs)
 
         groups: dict[tuple[str, str, str], list[FileRecord]] = {}
         for r in raw_recs:
@@ -180,7 +258,7 @@ class FileIndex:
                             self._scan_dir(Path(entry.path), out, visited, cur_depth + 1)
                     elif entry.is_file(follow_symlinks=False):
                         ext = Path(entry.path).suffix.lower()
-                        if ext not in DOCUMENT_EXTENSIONS:
+                        if ext not in INDEXED_EXTENSIONS:
                             continue
                         p_norm = str(Path(entry.path).resolve())
                         if p_norm not in visited:
@@ -206,9 +284,11 @@ class FileIndex:
                 badge, snippet = cached.get("badge", ""), cached.get("snippet", "")
             else:
                 now = time.time()
-                is_text = ext in (".txt", ".md", ".csv", ".tsv", ".log", ".json")
+                is_text = ext in (".txt", ".md", ".csv", ".tsv", ".log", ".json", ".ini", ".cfg")
                 is_recent = (now - st.st_mtime) <= 14 * 86400
-                if not is_danger and ext not in (".zip", ".7z", ".rar"):
+                if ext in IMAGE_EXTENSIONS:
+                    badge = "이미지 · 파일명 검색"
+                elif not is_danger and ext not in (".zip", ".7z", ".rar"):
                     if (is_text and st.st_size <= 512 * 1024) or (is_recent and st.st_size <= 2 * 1024 * 1024):
                         raw_text, text_badge = extract_document_text(p, max_chars=450)
                         badge = text_badge
@@ -245,27 +325,37 @@ def search(query: str, index: FileIndex | None = None, filters: dict | None = No
         index = build_index()
     q_str = query.strip()
     now = time.time()
-    if not q_str:
-        return [_record_to_dict(r, 100.0) for r in sorted(index.records, key=lambda x: x.mtime, reverse=True)[:limit]]
-
     parsed = parse_natural_query(q_str, now=now)
     if filters:
-        if "ext" in filters:
+        if "exts" in filters and filters["exts"]:
+            parsed.ext_filters.update(e.lower() for e in filters["exts"])
+        elif "ext" in filters and filters["ext"]:
             parsed.ext_filters.add(filters["ext"].lower())
         if "min_mtime" in filters:
             parsed.min_mtime = filters["min_mtime"]
         if "max_mtime" in filters:
             parsed.max_mtime = filters["max_mtime"]
 
+    def _passes(rec: FileRecord) -> bool:
+        if parsed.ext_filters and rec.ext not in parsed.ext_filters:
+            return False
+        if parsed.min_mtime and rec.mtime < parsed.min_mtime:
+            return False
+        if parsed.max_mtime and rec.mtime > parsed.max_mtime:
+            return False
+        return True
+
+    if not q_str:
+        # Recent document listing: filters apply, executables are not documents.
+        recs = sorted((r for r in index.records if not r.is_dangerous and _passes(r)),
+                      key=lambda x: x.mtime, reverse=True)
+        return [_record_to_dict(r, 100.0) for r in recs[:limit]]
+
     scored: list[tuple[float, FileRecord]] = []
     q_lower, q_bigrams = q_str.lower(), make_bigrams(q_str)
 
     for rec in index.records:
-        if parsed.ext_filters and rec.ext not in parsed.ext_filters:
-            continue
-        if parsed.min_mtime and rec.mtime < parsed.min_mtime:
-            continue
-        if parsed.max_mtime and rec.mtime > parsed.max_mtime:
+        if not _passes(rec):
             continue
 
         score = 0.0

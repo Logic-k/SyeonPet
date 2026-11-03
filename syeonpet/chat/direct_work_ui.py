@@ -74,6 +74,9 @@ class DirectWorkWidget(QWidget):
         self._busy = False
         self._current_scale = 10.0
         self._worker: _AIWorker | None = None
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._detach_worker)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -207,10 +210,16 @@ class DirectWorkWidget(QWidget):
             return
         try:
             from syeonpet.finder import extract_document_text
-            content = extract_document_text(path)
-            self.load_from_file_finder(Path(path).name, content)
+            text, badge = extract_document_text(path)
         except Exception as exc:
             QMessageBox.warning(self, "파일 열기 실패", f"파일 내용을 읽지 못했습니다:\n{exc}")
+            return
+        if not text.strip():
+            QMessageBox.information(
+                self, "본문 읽기 불가",
+                badge or "이 문서에서는 텍스트를 추출할 수 없어요. 파일 이름을 참고해 요청을 적어 주세요.")
+            return
+        self.load_from_file_finder(Path(path).name, text, badge)
 
     def load_from_file_finder(self, file_name: str, extracted_text: str, badge: str = ""):
         """Populate input from file finder search results."""
@@ -263,6 +272,22 @@ class DirectWorkWidget(QWidget):
         self._worker.finished_signal.connect(self._on_ai_finished)
         self._worker.start()
 
+    def _detach_worker(self):
+        """Release a running AI worker so it is never destroyed mid-request."""
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            try:
+                worker.finished_signal.disconnect(self._on_ai_finished)
+            except (TypeError, RuntimeError):
+                pass
+            worker.setParent(None)
+            worker.finished.connect(worker.deleteLater)
+        self._worker = None
+
+    def closeEvent(self, event):
+        self._detach_worker()
+        super().closeEvent(event)
+
     def _on_ai_finished(self, result: str, error: str):
         self._set_busy(False)
         if result and not error:
@@ -295,19 +320,14 @@ class DirectWorkWidget(QWidget):
         path, filt = QFileDialog.getSaveFileName(
             self,
             "문서로 저장",
-            "초안.txt",
-            "텍스트 문서 (*.txt);;마크다운 문서 (*.md);;엑셀 CSV (*.csv)",
+            "초안.hwpx",
+            "한글 문서 (*.hwpx);;텍스트 문서 (*.txt);;마크다운 문서 (*.md);;엑셀 CSV (*.csv);;한글 붙여넣기용 HTML (*.html)",
         )
         if not path:
             return
         try:
-            from syeonpet.work.doc_export import export_to_csv, export_to_markdown, export_to_txt
-            if path.endswith(".csv"):
-                export_to_csv(text, path)
-            elif path.endswith(".md"):
-                export_to_markdown(text, path)
-            else:
-                export_to_txt(text, path)
+            from syeonpet.work.doc_export import export_deliverable
+            export_deliverable(text, path)
             self.task_feedback.emit("success")
             QMessageBox.information(self, "저장 완료", f"파일을 저장했습니다:\n{path}")
         except Exception as exc:

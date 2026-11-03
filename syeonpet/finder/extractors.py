@@ -113,11 +113,23 @@ def _parse_xml_text(xml_bytes: bytes) -> list[str]:
     return parts
 
 
+def _decode_prv_text(data: bytes) -> str:
+    """PrvText.txt is UTF-16LE in older HWPX files but UTF-8 in modern ones."""
+    head = data[:400]
+    if (head.startswith((b"\xff\xfe", b"\xfe\xff"))
+            or head.count(b"\x00") > len(head) // 5):
+        return data.decode("utf-16", errors="replace")
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("utf-16le", errors="replace")
+
+
 def _extract_hwpx(path: Path, max_chars: int) -> tuple[str, str]:
     with zipfile.ZipFile(path, "r") as zf:
         nl = zf.namelist()
         if max_chars <= 800 and "Preview/PrvText.txt" in nl:
-            return zf.read("Preview/PrvText.txt").decode("utf-16le", errors="replace")[:max_chars].strip(), ""
+            return _decode_prv_text(zf.read("Preview/PrvText.txt"))[:max_chars].strip(), ""
         secs = sorted(n for n in nl if n.startswith("Contents/section") and n.endswith(".xml"))
         collected = []
         for sname in secs:
@@ -130,7 +142,7 @@ def _extract_hwpx(path: Path, max_chars: int) -> tuple[str, str]:
         if res:
             return res[:max_chars], ""
         if "Preview/PrvText.txt" in nl:
-            return zf.read("Preview/PrvText.txt").decode("utf-16le", errors="replace")[:max_chars].strip(), ""
+            return _decode_prv_text(zf.read("Preview/PrvText.txt"))[:max_chars].strip(), ""
     return "", ""
 
 

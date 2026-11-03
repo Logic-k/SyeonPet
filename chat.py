@@ -202,9 +202,8 @@ class ChatPanel(QWidget):
         if key == "work" and DirectWorkWidget is None:
             key = "prompt"
         if key == "finder" and getattr(self, "finder_widget", None) is not None:
-            if not getattr(self.finder_widget, "_indexed", False) and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
-                self.finder_widget._indexed = True
-                self.finder_widget.start_async_indexing()
+            if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                self.finder_widget.ensure_indexed()
         idx = {"work": 0, "finder": 1, "bag": 2, "prompt": 3}.get(key, 0)
         self.section_stack.setCurrentIndex(idx)
         btn = self.section_buttons.get(key)

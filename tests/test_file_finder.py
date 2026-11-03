@@ -297,6 +297,117 @@ class FileFinderTests(unittest.TestCase):
         self.assertEqual(results[0]["name"], "new_doc.txt")
         self.assertEqual(results[1]["name"], "old_doc.txt")
 
+    def test_empty_query_applies_filters_and_hides_executables(self):
+        """Regression: type/time chips were silently ignored on the default listing."""
+        doc = self.base / "report.pdf"
+        doc.write_bytes(b"%PDF-1.4\n%%EOF")
+        exe = self.base / "setup.exe"
+        exe.write_bytes(b"MZ\x00\x00")
+        txt = self.base / "note.txt"
+        txt.write_text("memo", encoding="utf-8")
+        now = time.time()
+        for p in (doc, exe, txt):
+            os.utime(p, (now - 10, now - 10))
+
+        idx = build_index(self.base)
+        all_res = search("", index=idx)
+        self.assertTrue(all(not r["is_dangerous"] for r in all_res))
+
+        pdf_res = search("", index=idx, filters={"exts": {".pdf"}})
+        self.assertEqual(len(pdf_res), 1)
+        self.assertEqual(pdf_res[0]["name"], "report.pdf")
+
+        set_res = search("", index=idx, filters={"exts": {".hwp", ".hwpx"}})
+        self.assertEqual(len(set_res), 0)
+
+        legacy = search("", index=idx, filters={"ext": ".txt"})
+        self.assertEqual(len(legacy), 1)
+        self.assertEqual(legacy[0]["name"], "note.txt")
+
+        time_res = search("", index=idx, filters={"min_mtime": now - 5})
+        self.assertEqual(len(time_res), 0)
+
+    def test_multi_ext_type_chip_matches_all_variants(self):
+        """Regression: the 한글(.hwp/.hwpx) chip used to hide every .hwp file."""
+        import struct as _st
+        hwp = self.base / "legacy_doc.hwp"
+        hwp.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 504)
+        hwpx = self.base / "new_doc.hwpx"
+        hwpx.write_text("<xml/>", encoding="utf-8")
+        idx = build_index(self.base)
+        res = search("doc", index=idx, filters={"exts": {".hwp", ".hwpx"}})
+        names = {r["name"] for r in res}
+        self.assertEqual(names, {"legacy_doc.hwp", "new_doc.hwpx"})
+
+    def test_kakaotalk_korean_folder_hint(self):
+        """'카톡 받은 파일' must match the real '카카오톡 받은 파일' directory."""
+        kakao_dir = self.base / "카카오톡 받은 파일"
+        kakao_dir.mkdir()
+        k_file = kakao_dir / "행사사진.pdf"
+        k_file.write_bytes(b"%PDF-1.4\n%%EOF")
+        other = self.base / "행사사진_인쇄용.pdf"
+        other.write_bytes(b"%PDF-1.4\n%%EOF")
+        now = time.time()
+        os.utime(other, (now - 5, now - 5))
+
+        idx = build_index(self.base)
+        res = search("카톡에서 받은 행사사진", index=idx, limit=10)
+        self.assertTrue(res)
+        self.assertIn("카카오톡", res[0]["folder"])
+
+    def test_send_to_assistant_sends_clean_text_not_tuple_repr(self):
+        """Regression: send_card used to ship str((text, badge)) to the assistant."""
+        doc = self.base / "meeting.txt"
+        doc.write_text("회의록 본문 내용입니다", encoding="utf-8")
+        idx = build_index(self.base)
+        widget = FileFinderWidget(index=idx)
+        emitted = []
+        widget.send_to_assistant.connect(lambda n, s, b: emitted.append((n, s, b)))
+        widget._on_send_card({"name": "meeting.txt", "path": str(doc.resolve()),
+                              "snippet": "", "badge": "텍스트"})
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0][0], "meeting.txt")
+        self.assertIn("회의록 본문", emitted[0][1])
+        self.assertNotIn("('", emitted[0][1])
+        widget.close()
+
+    def test_utf8_prv_text_in_modern_hwpx(self):
+        """PrvText.txt may be UTF-8 (modern) or UTF-16LE (legacy); both decode."""
+        p = self.base / "modern.hwpx"
+        with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("Preview/PrvText.txt", "현대 미리보기 텍스트".encode("utf-8"))
+        txt, _ = extract_document_text(p, max_chars=200)
+        self.assertIn("현대 미리보기", txt)
+
+        p2 = self.base / "legacy.hwpx"
+        with zipfile.ZipFile(p2, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("Preview/PrvText.txt", "레거시 미리보기".encode("utf-16le"))
+        txt2, _ = extract_document_text(p2, max_chars=200)
+        self.assertIn("레거시 미리보기", txt2)
+
+    def test_index_failure_allows_retry(self):
+        """Regression: a failed index used to leave the widget permanently empty."""
+        widget = FileFinderWidget(index=None)
+        self.assertFalse(widget._index_requested)
+        widget._on_indexing_finished(None)
+        self.assertFalse(widget._index_requested)
+        widget.close()
+
+    def test_extra_roots_persist_and_merge(self):
+        """Custom work folders survive restarts via extra_roots.json."""
+        from syeonpet.finder.index_engine import get_cache_file_path
+        import json as _json
+        extra_dir = self.base / "내업무"
+        extra_dir.mkdir()
+        cache_file = get_cache_file_path()
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        (cache_file.parent / "extra_roots.json").write_text(
+            _json.dumps([str(extra_dir)]), encoding="utf-8")
+        widget = FileFinderWidget(index=FileIndex([]))
+        merged = widget._merged_roots()
+        self.assertIn(extra_dir, merged)
+        widget.close()
+
     def test_finder_widget_and_dialog_ui_interaction(self):
         test_file = self.base / "2026_업무안내.docx"
         test_file.write_text("dummy content", encoding="utf-8")

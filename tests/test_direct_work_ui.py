@@ -174,10 +174,19 @@ class DirectWorkWidgetTests(unittest.TestCase):
     def test_save_to_document(self):
         self.widget.result.setPlainText("저장할 초안 내용입니다.")
         with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=("test.txt", "텍스트 (*.txt)")):
-            with patch("syeonpet.work.doc_export.export_to_txt") as mock_export:
+            with patch("syeonpet.work.doc_export.export_deliverable") as mock_export:
                 with patch.object(QMessageBox, "information"):
                     self.widget._save_to_document()
                     mock_export.assert_called_once_with("저장할 초안 내용입니다.", "test.txt")
+                    self.assertIn("success", self.feedbacks)
+
+    def test_save_to_document_hwpx_path(self):
+        self.widget.result.setPlainText("한글 문서 초안")
+        with patch("PySide6.QtWidgets.QFileDialog.getSaveFileName", return_value=("초안.hwpx", "한글 문서 (*.hwpx)")):
+            with patch("syeonpet.work.doc_export.export_deliverable") as mock_export:
+                with patch.object(QMessageBox, "information"):
+                    self.widget._save_to_document()
+                    mock_export.assert_called_once_with("한글 문서 초안", "초안.hwpx")
                     self.assertIn("success", self.feedbacks)
 
     def test_open_web_ai(self):

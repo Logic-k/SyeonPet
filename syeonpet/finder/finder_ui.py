@@ -6,6 +6,7 @@ and safe execution blocking guards.
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import os
 from pathlib import Path
 import time
@@ -13,6 +14,7 @@ import time
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QDialog,
     QFileDialog,
@@ -26,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .index_engine import FileIndex, build_index, safe_open_or_reveal, search
+from .index_engine import FileIndex, build_index, get_cache_file_path, safe_open_or_reveal, search
 
 STYLE_CARD = """
 QFrame { background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 4px; }
@@ -65,7 +67,12 @@ class FileCardWidget(QFrame):
         # Meta row: location + badges + duplicate bundle
         meta_row = QHBoxLayout()
         loc = item.get("folder", "")
-        loc_str = "💬 카카오톡 받은 파일" if "kakaotalk" in loc.lower() else ("🖥️ 바탕화면" if "desktop" in loc.lower() else ("📥 다운로드 폴더" if "downloads" in loc.lower() else ("📁 내 문서" if "documents" in loc.lower() else f"📁 {loc}")))
+        loc_low = loc.lower()
+        loc_str = ("💬 카카오톡 받은 파일" if ("kakaotalk" in loc_low or "카카오톡" in loc)
+                   else "🖥️ 바탕화면" if ("desktop" in loc_low or "바탕 화면" in loc)
+                   else "📥 다운로드 폴더" if ("downloads" in loc_low or "다운로드" in loc)
+                   else "📁 내 문서" if ("documents" in loc_low or "문서" in loc)
+                   else f"📁 {loc}")
         meta_row.addWidget(QLabel(loc_str))
         if item.get("badge"):
             meta_row.addWidget(QLabel(f"[{item['badge']}]"))
@@ -143,42 +150,108 @@ class FileFinderWidget(QWidget):
         super().__init__(parent)
         self.index = index
         self._worker: _IndexWorker | None = None
-        self._filter_ext = None
+        self._index_requested = False
+        self._filter_exts: set[str] | None = None
         self._filter_min_mtime = None
         self.setWindowTitle("폴더 지옥 탈출 · 션이 파일 탐정")
         self.setFont(QFont("맑은 고딕", 10))
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._detach_worker)
         self._init_ui()
-        if self.index is not None and getattr(self.index, "records", None):
-            self.do_search("")
-        elif self.index is not None:
+        if self.index is not None:
             self.do_search("")
         else:
             if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
                 self.index = FileIndex([])
                 self.do_search("")
             else:
-                self.start_async_indexing()
+                self.ensure_indexed()
+
+    def ensure_indexed(self) -> None:
+        """Start the default-roots index once; retries are allowed after failure."""
+        if self._index_requested:
+            return
+        self._index_requested = True
+        self.start_async_indexing()
+
+    def _extra_roots_path(self) -> Path:
+        return get_cache_file_path().parent / "extra_roots.json"
+
+    def _persisted_extra_roots(self) -> list[Path]:
+        try:
+            raw = json.loads(self._extra_roots_path().read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        out = []
+        for item in raw if isinstance(raw, list) else []:
+            try:
+                p = Path(str(item))
+            except Exception:
+                continue
+            if p.exists():
+                out.append(p)
+        return out
+
+    def _remember_extra_root(self, folder: Path) -> None:
+        roots = self._persisted_extra_roots()
+        if str(folder).lower() in {str(r).lower() for r in roots}:
+            return
+        roots.append(folder)
+        try:
+            path = self._extra_roots_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps([str(r) for r in roots], ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _merged_roots(self, roots=None):
+        from .index_engine import get_default_scan_roots
+        base = list(roots) if roots else get_default_scan_roots()
+        seen = {str(r).lower() for r in base}
+        for extra in self._persisted_extra_roots():
+            if str(extra).lower() not in seen:
+                seen.add(str(extra).lower())
+                base.append(extra)
+        return base
 
     def start_async_indexing(self, roots=None, cache_path=None) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         if hasattr(self, "status_lbl"):
+            self.status_lbl.setText("📂 문서를 확인하고 있어요...")
             self.status_lbl.show()
-        self._worker = _IndexWorker(roots=roots, cache_path=cache_path, parent=self)
+        self._worker = _IndexWorker(roots=self._merged_roots(roots), cache_path=cache_path, parent=self)
         self._worker.finished_index.connect(self._on_indexing_finished)
         self._worker.start()
 
     def _on_indexing_finished(self, idx: FileIndex | None) -> None:
-        if hasattr(self, "status_lbl"):
-            self.status_lbl.hide()
         if idx is not None:
             self.index = idx
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.hide()
+        else:
+            # Allow the next section open or refresh to retry.
+            self._index_requested = False
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.setText("⚠️ 문서 확인에 실패했어요. 🔄 새로고침으로 다시 시도해 주세요.")
+                self.status_lbl.show()
         self.do_search(self.search_input.text())
 
+    def _detach_worker(self) -> None:
+        """Release a running worker so it is never destroyed mid-scan."""
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            try:
+                worker.finished_index.disconnect(self._on_indexing_finished)
+            except (TypeError, RuntimeError):
+                pass
+            worker.setParent(None)
+            worker.finished.connect(worker.deleteLater)
+        self._worker = None
+
     def closeEvent(self, event) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.quit()
-            self._worker.wait(500)
+        self._detach_worker()
         super().closeEvent(event)
 
     def _init_ui(self) -> None:
@@ -236,13 +309,22 @@ class FileFinderWidget(QWidget):
         f_row.addSpacing(10)
         f_row.addWidget(QLabel("종류:"))
         self.type_grp = QButtonGroup(self)
-        for i, (lbl, ext) in enumerate([("전체", None), ("한글(.hwpx/.hwp)", ".hwpx"), ("워드(.docx)", ".docx"), ("엑셀·표", ".xlsx"), ("PDF", ".pdf"), ("발표자료", ".pptx")]):
+        type_chips = [
+            ("전체", None),
+            ("한글(.hwp/.hwpx)", {".hwp", ".hwpx"}),
+            ("워드(.doc/.docx)", {".doc", ".docx"}),
+            ("엑셀·표", {".xls", ".xlsx", ".xlsm", ".csv"}),
+            ("PDF", {".pdf"}),
+            ("발표자료", {".ppt", ".pptx"}),
+            ("사진", {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic"}),
+        ]
+        for i, (lbl, exts) in enumerate(type_chips):
             b = QPushButton(lbl)
             b.setCheckable(True)
             if i == 0:
                 b.setChecked(True)
             b.setStyleSheet(self._chip_style())
-            b.clicked.connect(lambda _, e=ext: self._on_type_chip(e))
+            b.clicked.connect(lambda _, e=exts: self._on_type_chip(e))
             self.type_grp.addButton(b, i)
             f_row.addWidget(b)
         f_row.addStretch()
@@ -283,8 +365,8 @@ class FileFinderWidget(QWidget):
         self._filter_min_mtime = (time.time() - sec) if sec else None
         self.do_search(self.search_input.text())
 
-    def _on_type_chip(self, ext: str | None) -> None:
-        self._filter_ext = ext
+    def _on_type_chip(self, exts: set[str] | None) -> None:
+        self._filter_exts = exts
         self.do_search(self.search_input.text())
 
     def _on_search(self) -> None:
@@ -293,11 +375,14 @@ class FileFinderWidget(QWidget):
     def _on_add_folder(self) -> None:
         f = QFileDialog.getExistingDirectory(self, "추가할 업무 폴더 선택")
         if f:
-            new_roots = (list(self.index.roots) if self.index else []) + [Path(f)]
+            folder = Path(f)
+            self._remember_extra_root(folder)
+            new_roots = (list(self.index.roots) if self.index and self.index.roots else []) + [folder]
             self.start_async_indexing(roots=new_roots)
 
     def _on_refresh(self) -> None:
-        roots = self.index.roots if self.index else None
+        roots = self.index.roots if self.index and self.index.roots else None
+        self._index_requested = True
         self.start_async_indexing(roots=roots)
 
     def _on_send_card(self, item: dict) -> None:
@@ -306,8 +391,8 @@ class FileFinderWidget(QWidget):
         if path_str:
             try:
                 from .extractors import extract_document_text
-                res = extract_document_text(path_str)
-                full_text = res.get("text", "") if isinstance(res, dict) else str(res)
+                text, _doc_badge = extract_document_text(path_str)
+                full_text = text or ""
             except Exception:
                 full_text = ""
         if not full_text.strip():
@@ -317,8 +402,8 @@ class FileFinderWidget(QWidget):
     def do_search(self, query: str) -> None:
         q = query.strip()
         filts = {}
-        if self._filter_ext:
-            filts["ext"] = self._filter_ext
+        if self._filter_exts:
+            filts["exts"] = self._filter_exts
         if self._filter_min_mtime:
             filts["min_mtime"] = self._filter_min_mtime
         results = search(q, index=self.index, filters=filts, limit=30) if self.index else []

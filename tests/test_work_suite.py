@@ -317,6 +317,33 @@ class TestDocExport(unittest.TestCase):
             # Must start with UTF-8 BOM
             self.assertTrue(csv_bytes.startswith(b"\xef\xbb\xbf"))
 
+    def test_export_hwpx_is_valid_and_roundtrips(self):
+        """HWPX export: mimetype first/stored, valid XML, finder can re-read it."""
+        import zipfile
+        import xml.etree.ElementTree as ET
+        from syeonpet.finder import extract_document_text
+
+        sample = "제목 줄입니다.\n\n| 항목 | 담당 |\n|:---|:---|\n| 안내장 | 김민오 |\n\n끝줄 & 특수<문자>"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = export_deliverable(sample, Path(tmpdir) / "out.hwpx", title="테스트 문서")
+            self.assertTrue(out.exists())
+            with zipfile.ZipFile(out) as zf:
+                names = zf.namelist()
+                self.assertEqual(names[0], "mimetype")
+                self.assertEqual(zf.read("mimetype"), b"application/hwp+zip")
+                self.assertEqual(zf.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
+                for n in names:
+                    if n.endswith((".xml", ".hpf", ".rdf")):
+                        ET.fromstring(zf.read(n))
+                self.assertIn("Contents/section0.xml", names)
+                self.assertIn("Contents/header.xml", names)
+                self.assertIn("Preview/PrvText.txt", names)
+            text, _ = extract_document_text(out)
+            self.assertIn("제목 줄입니다", text)
+            self.assertIn("안내장", text)
+            self.assertIn("김민오", text)
+            self.assertIn("끝줄", text)
+
 
 if __name__ == "__main__":
     unittest.main()

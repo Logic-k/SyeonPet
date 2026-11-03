@@ -37,16 +37,19 @@ TYPE_SYNONYMS: dict[str, set[str]] = {
     "그림": {".jpg", ".jpeg", ".png"},
 }
 
-FOLDER_SYNONYMS: dict[str, str] = {
-    "카톡": "kakaotalk",
-    "카카오톡": "kakaotalk",
-    "다운로드": "downloads",
-    "다운": "downloads",
-    "바탕화면": "desktop",
-    "바탕": "desktop",
-    "데스크탑": "desktop",
-    "내문서": "documents",
-    "문서함": "documents",
+FOLDER_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "카톡": ("kakaotalk", "카카오톡"),
+    "카카오톡": ("kakaotalk", "카카오톡"),
+    "카카오": ("kakaotalk", "카카오톡"),
+    "다운로드": ("downloads", "다운로드"),
+    "다운": ("downloads", "다운로드"),
+    "바탕화면": ("desktop", "바탕 화면"),
+    "바탕": ("desktop", "바탕 화면"),
+    "데스크탑": ("desktop", "바탕 화면"),
+    "내문서": ("documents", "문서"),
+    "문서함": ("documents", "문서"),
+    "원드라이브": ("onedrive",),
+    "사진첩": ("pictures", "사진"),
 }
 
 CONVERSATIONAL_FILLERS = {
@@ -142,9 +145,9 @@ def parse_natural_query(raw_query: str, now: float | None = None) -> ParsedQuery
 
         # Check folder synonyms
         matched_folder = False
-        for fkey, ftarget in FOLDER_SYNONYMS.items():
+        for fkey, ftargets in FOLDER_SYNONYMS.items():
             if fkey in base:
-                folder_hints.add(ftarget)
+                folder_hints.update(ftargets)
                 matched_folder = True
         if matched_folder and base in FOLDER_SYNONYMS:
             continue
