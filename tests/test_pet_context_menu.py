@@ -132,6 +132,33 @@ class PetContextMenuTests(unittest.TestCase):
             self.assertEqual(fake_box.finished.connect.call_count, 1)
             open_url.assert_not_called()
 
+    def test_prepared_update_restarts_after_countdown_or_when_asked(self):
+        from PySide6.QtCore import QTimer
+        restart = MagicMock()
+        dialogs = []
+        box = main.offer_update_restart("9.9.9", restart, dialogs, seconds=2)
+        self.assertIn("9.9.9", box.text())
+        self.assertIsNone(main.offer_update_restart("9.9.9", restart, dialogs))
+        timer = box.findChild(QTimer)
+        timer.timeout.emit()
+        restart.assert_not_called()
+        timer.timeout.emit()
+        restart.assert_called_once()
+        self.assertEqual(dialogs, [])
+
+        restart.reset_mock()
+        box = main.offer_update_restart("9.9.9", restart, dialogs)
+        next(b for b in box.buttons() if b.text() == "지금 다시 시작").click()
+        restart.assert_called_once()
+
+    def test_later_keeps_the_prepared_update_for_next_launch(self):
+        restart = MagicMock()
+        dialogs = []
+        box = main.offer_update_restart("9.9.9", restart, dialogs)
+        next(b for b in box.buttons() if b.text() == "나중에").click()
+        restart.assert_not_called()
+        self.assertEqual(dialogs, [])
+
 
 if __name__ == "__main__":
     unittest.main()

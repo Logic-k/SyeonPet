@@ -271,6 +271,42 @@ class SwitchTests(unittest.TestCase):
         self.assertIsNone(seen[0][0]["pending"])
         self.assertEqual(seen[0][1], [{"version": "1.0.0", "trial": False}])
 
+    def test_restart_launches_stable_launcher_without_child_identity(self):
+        with self.assertRaises(switch.SwitchError):
+            switch.restart_after_exit(self.root)
+        (self.root / "SyeonPet.exe").write_bytes(b"synthetic")
+        child = {switch._ROOT_ENV: str(self.root), switch._CHILD_ENV: "1.0.0",
+                 switch._TOKEN_ENV: "0" * 32, "SYEONPET_UPDATE_ROLLBACK": "1"}
+        with patch.dict(os.environ, child), patch.object(switch.subprocess, "Popen") as popen:
+            switch.restart_after_exit(self.root)
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0], [str(self.root.resolve() / "SyeonPet.exe")])
+        self.assertEqual(kwargs["env"][switch._RESTART_ENV], "1")
+        for name in child:
+            self.assertNotIn(name, kwargs["env"])
+
+    def test_restarted_launcher_waits_until_previous_instance_exits(self):
+        holder = switch._FileLock(self.directory / ("instance-" + "a" * 32 + ".lock"))
+        self.assertTrue(holder.acquire())
+        releaser = threading.Timer(.4, holder.release)
+        with patch.dict(os.environ, {switch._RESTART_ENV: "1"}):
+            releaser.start()
+            switch.wait_for_restart(self.root, timeout=10)
+            self.assertNotIn(switch._RESTART_ENV, os.environ)
+        releaser.join()
+        self.assertIsNone(holder.file)
+        self.assertEqual(switch._held_instance_count(self.directory), 0)
+
+    def test_normal_launch_does_not_wait_for_other_instances(self):
+        holder = switch._FileLock(self.directory / ("instance-" + "b" * 32 + ".lock"))
+        self.assertTrue(holder.acquire())
+        try:
+            with patch.object(switch.time, "sleep") as sleep:
+                switch.wait_for_restart(self.root, timeout=10)
+            sleep.assert_not_called()
+        finally:
+            holder.release()
+
 
 if __name__ == "__main__":
     unittest.main()

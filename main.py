@@ -18,6 +18,7 @@ if __name__ == "__main__":
     import updater_switch
     from update_trust import PUBLIC_KEY_BYTES
     try:
+        updater_switch.wait_for_restart(ROOT)
         _exit_code = updater_switch.bootstrap(ROOT, PUBLIC_KEY_BYTES, updater_core.verify_staged,
                                               base_version=APP_VERSION)
         if _exit_code is not None:
@@ -174,6 +175,51 @@ def present_update_result(result: dict, tray: QSystemTrayIcon, dialogs: list) ->
     box.open()
 
 
+RESTART_COUNTDOWN_SECONDS = 15
+
+
+def offer_update_restart(version: str, restart, dialogs: list,
+                         seconds: int = RESTART_COUNTDOWN_SECONDS) -> QMessageBox | None:
+    """Count down to an automatic restart; 나중에 keeps the next-launch behavior."""
+    if any(getattr(box, "_restart_offer", False) for box in dialogs):
+        return None
+    box = QMessageBox(QMessageBox.Icon.Information, "션 업데이트", "", QMessageBox.StandardButton.NoButton)
+    box._restart_offer = True
+    now = box.addButton("지금 다시 시작", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("나중에", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(now)
+    remaining = [seconds]
+    timer = QTimer(box)
+
+    def render():
+        box.setText(f"새 버전 {version}을 준비했어요.\n"
+                    f"{remaining[0]}초 뒤 션이 자동으로 다시 시작해 업데이트를 적용해요.\n"
+                    "작성 중인 대화는 보관했다가 다시 시작한 뒤 복원해요.")
+
+    def tick():
+        remaining[0] -= 1
+        if remaining[0] <= 0:
+            timer.stop()
+            box.done(int(QMessageBox.ButtonRole.AcceptRole.value))
+            return
+        render()
+
+    def finished(_value):
+        timer.stop()
+        if box in dialogs:
+            dialogs.remove(box)
+        if box.clickedButton() is now or remaining[0] <= 0:
+            restart()
+
+    render()
+    timer.timeout.connect(tick)
+    box.finished.connect(finished)
+    dialogs.append(box)
+    timer.start(1000)
+    box.open()
+    return box
+
+
 def load_config() -> dict:
     try:
         return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -322,7 +368,6 @@ def main() -> int:
     menu = QMenu()
     update_checker = UpdatePreparer(INSTALL_ROOT, parent=app)
     update_dialogs: list = []
-    update_checker.completed.connect(lambda res: present_update_result(res, tray, update_dialogs))
 
     def on_tray_activated(reason):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -386,7 +431,7 @@ def main() -> int:
         set_frame_blending, set_quiet_mode, set_follow_windows_motion, DOUBLE_CLICK_CHOICES,
         autostart_enabled, set_autostart)
 
-    def quit_app():
+    def quit_app(restart=False):
         try:
             pending = updater_switch.pending_version(INSTALL_ROOT)
         except Exception:
@@ -408,11 +453,31 @@ def main() -> int:
                 box.finished.connect(lambda _v: update_dialogs.remove(box))
                 box.open()
                 return
+            if restart:
+                try:
+                    updater_switch.restart_after_exit(INSTALL_ROOT)
+                except Exception:
+                    update_checker.cancel_shutdown()
+                    box = QMessageBox(QMessageBox.Icon.Warning, "션 업데이트",
+                                      "션을 다시 시작하지 못했어요. 션을 종료한 뒤 직접 다시 실행하면 "
+                                      "업데이트가 적용됩니다.", QMessageBox.StandardButton.Ok)
+                    update_dialogs.append(box)
+                    box.finished.connect(lambda _v: update_dialogs.remove(box))
+                    box.open()
+                    return
             app.quit()
         chat_panel.request_app_quit(finish_quit, preserve_for_update=bool(pending))
 
+    def on_update_result(result):
+        if result.get("status") == "ready" and result.get("version"):
+            offer_update_restart(result["version"], lambda: quit_app(restart=True), update_dialogs)
+        else:
+            present_update_result(result, tray, update_dialogs)
+
+    update_checker.completed.connect(on_update_result)
+
     act_quit = menu.addAction("종료")
-    act_quit.triggered.connect(quit_app)
+    act_quit.triggered.connect(lambda: quit_app())
 
     def apply_motion_preference(_sys_val=None):
         from_windows = motion_preference.reduced and settings_actions["follow_windows"].isChecked()

@@ -29,8 +29,10 @@ _TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 _ROOT_ENV = "SYEONPET_INSTALL_ROOT"
 _CHILD_ENV = "SYEONPET_UPDATE_CHILD"
 _TOKEN_ENV = "SYEONPET_UPDATE_READY_TOKEN"
+_RESTART_ENV = "SYEONPET_RESTART_WAIT"
 _instance_lock = None
 _HEALTH_NOTICE_SECONDS = 30
+_RESTART_WAIT_SECONDS = 60
 
 
 def _version(value):
@@ -190,6 +192,53 @@ def _running_instances(directory):
             # it can never cause an unsafe version transition.
             result.append({"version": None, "trial": True})
     return result
+
+
+def _held_instance_count(directory):
+    """Count instance locks still held by a live process (released on exit)."""
+    count = 0
+    for path in Path(directory).glob("instance-*.lock"):
+        if not re.fullmatch(r"instance-[0-9a-f]{32}\.lock", path.name):
+            continue
+        probe = _FileLock(path)
+        if probe.acquire():
+            probe.release()
+        else:
+            count += 1
+    return count
+
+
+def restart_after_exit(install_root):
+    """Start the stable launcher, which waits for this installation to exit."""
+    root = _install_root(install_root)
+    launcher = root / "SyeonPet.exe"
+    if not launcher.is_file():
+        raise SwitchError("다시 시작할 실행 파일을 찾지 못했습니다.")
+    env = os.environ.copy()
+    for name in (_ROOT_ENV, _CHILD_ENV, _TOKEN_ENV, "SYEONPET_UPDATE_ROLLBACK"):
+        env.pop(name, None)
+    env[_RESTART_ENV] = "1"
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            # Outlive a job object that would close with the current launcher.
+            subprocess.Popen([str(launcher)], cwd=str(root), env=env, close_fds=True,
+                             creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
+            return
+        except OSError:
+            pass
+    subprocess.Popen([str(launcher)], cwd=str(root), env=env, close_fds=True, creationflags=flags)
+
+
+def wait_for_restart(app_root, timeout=_RESTART_WAIT_SECONDS):
+    """Before choosing a version, let the instance that asked to restart exit."""
+    if os.environ.pop(_RESTART_ENV, None) != "1" or os.environ.get(_CHILD_ENV) is not None:
+        return
+    directory = state_directory(app_root)
+    end = time.monotonic() + timeout
+    while _held_instance_count(directory) and time.monotonic() < end:
+        time.sleep(.2)
 
 
 def _register_instance(directory, state):
