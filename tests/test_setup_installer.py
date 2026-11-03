@@ -22,7 +22,8 @@ class SetupInstallerTests(unittest.TestCase):
         cls.temp_dir = tempfile.TemporaryDirectory(prefix="syeon-setup-test-")
         cls.work_dir = Path(cls.temp_dir.name)
 
-        cls.version = "0.2.0"
+        from version import APP_VERSION
+        cls.version = APP_VERSION
         cls.zip_output = cls.work_dir / f"SyeonPet-{cls.version}-windows.zip"
         cls.setup_output = cls.work_dir / f"SyeonPet-Setup-{cls.version}.exe"
 

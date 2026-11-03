@@ -28,9 +28,18 @@ DANGEROUS_EXTENSIONS = {
     ".exe", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jse",
     ".wsf", ".scr", ".com", ".pif", ".lnk", ".reg", ".hta"
 }
+DOCUMENT_EXTENSIONS = {
+    ".hwp", ".hwpx", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".csv",
+    ".ppt", ".pptx", ".pdf", ".txt", ".md", ".rtf", ".html", ".htm",
+    ".zip", ".7z", ".rar",
+    ".exe", ".bat", ".cmd", ".msi", ".ps1"
+}
 EXCLUDED_DIRS = {
     "appdata", "windows", "program files", "program files (x86)",
-    "$recycle.bin", "node_modules", ".git", "__pycache__", ".venv", "venv"
+    "$recycle.bin", "node_modules", ".git", "__pycache__", ".venv", "venv",
+    ".idea", ".vscode", "dist", "build", "target", "bin", "obj",
+    "cache", ".cache", ".gradle", ".cargo", "site-packages", "gems",
+    "vendor", "lib", "libs", "temp", "tmp", ".pytest_cache"
 }
 VERSION_CLEAN_RE = re.compile(
     r"([-_ ]*(?:초안|최종본|최종|진짜최종|수정\d*|검토본|검토의견|복사본|사본|작업본|\(복사본\)|\(\d+\)|_v\d+|_ver\d+))+$",
@@ -110,9 +119,11 @@ def get_cache_file_path() -> Path:
 
 
 class FileIndex:
-    def __init__(self, roots: list[Path], cache_path: Path | None = None):
+    def __init__(self, roots: list[Path], cache_path: Path | None = None, max_depth: int = 4, max_files: int = 5000):
         self.roots = roots
         self.cache_path = cache_path or get_cache_file_path()
+        self.max_depth = max_depth
+        self.max_files = max_files
         self.records: list[FileRecord] = []
         self._cache: dict[str, dict] = {}
         self._load_cache()
@@ -137,7 +148,7 @@ class FileIndex:
         raw_recs, visited = [], set()
         for root in self.roots:
             if root.exists():
-                self._scan_dir(root, raw_recs, visited)
+                self._scan_dir(root, raw_recs, visited, cur_depth=0)
 
         groups: dict[tuple[str, str, str], list[FileRecord]] = {}
         for r in raw_recs:
@@ -155,7 +166,9 @@ class FileIndex:
         self.records = final_recs
         self._save_cache()
 
-    def _scan_dir(self, folder: Path, out: list[FileRecord], visited: set[str]) -> None:
+    def _scan_dir(self, folder: Path, out: list[FileRecord], visited: set[str], cur_depth: int = 0) -> None:
+        if cur_depth > self.max_depth or len(out) >= self.max_files:
+            return
         try:
             with os.scandir(folder) as it:
                 for entry in it:
@@ -164,8 +177,11 @@ class FileIndex:
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         if nm.lower() not in EXCLUDED_DIRS and not nm.startswith("."):
-                            self._scan_dir(Path(entry.path), out, visited)
+                            self._scan_dir(Path(entry.path), out, visited, cur_depth + 1)
                     elif entry.is_file(follow_symlinks=False):
+                        ext = Path(entry.path).suffix.lower()
+                        if ext not in DOCUMENT_EXTENSIONS:
+                            continue
                         p_norm = str(Path(entry.path).resolve())
                         if p_norm not in visited:
                             visited.add(p_norm)
@@ -189,10 +205,16 @@ class FileIndex:
             elif cached and cached.get("mtime_ns") == st.st_mtime_ns and cached.get("size") == st.st_size:
                 badge, snippet = cached.get("badge", ""), cached.get("snippet", "")
             else:
-                if not is_danger and st.st_size <= 25 * 1024 * 1024:
-                    raw_text, text_badge = extract_document_text(p, max_chars=450)
-                    badge = text_badge
-                    snippet = " ".join(RRN_PATTERN.sub(r"\1-\2******", raw_text).split())[:450]
+                now = time.time()
+                is_text = ext in (".txt", ".md", ".csv", ".tsv", ".log", ".json")
+                is_recent = (now - st.st_mtime) <= 14 * 86400
+                if not is_danger and ext not in (".zip", ".7z", ".rar"):
+                    if (is_text and st.st_size <= 512 * 1024) or (is_recent and st.st_size <= 2 * 1024 * 1024):
+                        raw_text, text_badge = extract_document_text(p, max_chars=450)
+                        badge = text_badge
+                        snippet = " ".join(RRN_PATTERN.sub(r"\1-\2******", raw_text).split())[:450]
+                    elif st.st_size > 2 * 1024 * 1024:
+                        badge = "대용량 문서 · 파일명 검색"
                 self._cache[p_norm] = {"mtime_ns": st.st_mtime_ns, "size": st.st_size, "badge": badge, "snippet": snippet}
 
             stem = p.stem
@@ -206,7 +228,7 @@ class FileIndex:
             return None
 
 
-def build_index(roots_or_base_dir: Path | str | list[Path | str] | None = None, cache_path: Path | None = None) -> FileIndex:
+def build_index(roots_or_base_dir: Path | str | list[Path | str] | None = None, cache_path: Path | None = None, max_depth: int = 4, max_files: int = 5000) -> FileIndex:
     """Build or refresh local file index."""
     if roots_or_base_dir is None:
         roots = get_default_scan_roots()
@@ -214,7 +236,7 @@ def build_index(roots_or_base_dir: Path | str | list[Path | str] | None = None, 
         roots = [Path(roots_or_base_dir)]
     else:
         roots = [Path(r) for r in roots_or_base_dir]
-    return FileIndex(roots=roots, cache_path=cache_path)
+    return FileIndex(roots=roots, cache_path=cache_path, max_depth=max_depth, max_files=max_files)
 
 
 def search(query: str, index: FileIndex | None = None, filters: dict | None = None, limit: int = 30) -> list[dict]:

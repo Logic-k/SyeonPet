@@ -6,10 +6,11 @@ and safe execution blocking guards.
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from pathlib import Path
 import time
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -117,6 +118,22 @@ class FileCardWidget(QFrame):
         return "텍스트" if ext in (".txt", ".md") else "문서", "#475569"
 
 
+class _IndexWorker(QThread):
+    finished_index = Signal(object)
+
+    def __init__(self, roots=None, cache_path=None, parent=None):
+        super().__init__(parent)
+        self.roots = roots
+        self.cache_path = cache_path
+
+    def run(self):
+        try:
+            idx = build_index(roots_or_base_dir=self.roots, cache_path=self.cache_path)
+            self.finished_index.emit(idx)
+        except Exception:
+            self.finished_index.emit(None)
+
+
 class FileFinderWidget(QWidget):
     """Main novice-friendly smart file finder widget."""
 
@@ -124,13 +141,45 @@ class FileFinderWidget(QWidget):
 
     def __init__(self, index: FileIndex | None = None, parent=None):
         super().__init__(parent)
-        self.index, self._filter_ext, self._filter_min_mtime = index, None, None
+        self.index = index
+        self._worker: _IndexWorker | None = None
+        self._filter_ext = None
+        self._filter_min_mtime = None
         self.setWindowTitle("폴더 지옥 탈출 · 션이 파일 탐정")
         self.setFont(QFont("맑은 고딕", 10))
         self._init_ui()
-        if self.index is None:
-            self.index = build_index()
-        self.do_search("")
+        if self.index is not None and getattr(self.index, "records", None):
+            self.do_search("")
+        elif self.index is not None:
+            self.do_search("")
+        else:
+            if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+                self.index = FileIndex([])
+                self.do_search("")
+            else:
+                self.start_async_indexing()
+
+    def start_async_indexing(self, roots=None, cache_path=None) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.show()
+        self._worker = _IndexWorker(roots=roots, cache_path=cache_path, parent=self)
+        self._worker.finished_index.connect(self._on_indexing_finished)
+        self._worker.start()
+
+    def _on_indexing_finished(self, idx: FileIndex | None) -> None:
+        if hasattr(self, "status_lbl"):
+            self.status_lbl.hide()
+        if idx is not None:
+            self.index = idx
+        self.do_search(self.search_input.text())
+
+    def closeEvent(self, event) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.quit()
+            self._worker.wait(500)
+        super().closeEvent(event)
 
     def _init_ui(self) -> None:
         lay = QVBoxLayout(self)
@@ -200,9 +249,16 @@ class FileFinderWidget(QWidget):
         lay.addLayout(f_row)
 
         # Results area
+        hdr_row = QHBoxLayout()
         self.section_title = QLabel("🕒 최근 수정·다운로드한 문서")
         self.section_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #334155;")
-        lay.addWidget(self.section_title)
+        hdr_row.addWidget(self.section_title)
+        self.status_lbl = QLabel("📂 문서를 확인하고 있어요...")
+        self.status_lbl.setStyleSheet("font-size: 11px; color: #2563eb; background: #eff6ff; padding: 2px 6px; border-radius: 4px;")
+        self.status_lbl.hide()
+        hdr_row.addWidget(self.status_lbl)
+        hdr_row.addStretch()
+        lay.addLayout(hdr_row)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -236,15 +292,13 @@ class FileFinderWidget(QWidget):
 
     def _on_add_folder(self) -> None:
         f = QFileDialog.getExistingDirectory(self, "추가할 업무 폴더 선택")
-        if f and self.index:
-            self.index.roots.append(Path(f))
-            self.index.rebuild()
-            self.do_search(self.search_input.text())
+        if f:
+            new_roots = (list(self.index.roots) if self.index else []) + [Path(f)]
+            self.start_async_indexing(roots=new_roots)
 
     def _on_refresh(self) -> None:
-        if self.index:
-            self.index.rebuild()
-            self.do_search(self.search_input.text())
+        roots = self.index.roots if self.index else None
+        self.start_async_indexing(roots=roots)
 
     def _on_send_card(self, item: dict) -> None:
         full_text = ""
@@ -267,7 +321,7 @@ class FileFinderWidget(QWidget):
             filts["ext"] = self._filter_ext
         if self._filter_min_mtime:
             filts["min_mtime"] = self._filter_min_mtime
-        results = search(q, index=self.index, filters=filts, limit=30)
+        results = search(q, index=self.index, filters=filts, limit=30) if self.index else []
 
         while self.card_lay.count() > 1:
             item = self.card_lay.takeAt(0)

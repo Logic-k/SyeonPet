@@ -227,27 +227,43 @@ def _extract_pptx(path: Path, max_chars: int) -> tuple[str, str]:
 
 
 def _extract_pdf(raw_data: bytes, max_chars: int) -> tuple[str, str]:
-    if b"/Encrypt" in raw_data:
+    if b"/Encrypt" in raw_data[:8192]:
         return "", "암호 문서 · 파일명 검색"
-    parts = []
-    for m in re.finditer(rb"stream[\r\n]+(.*?)[\r\n]+endstream", raw_data[:MAX_PDF_SCAN_BYTES], re.DOTALL):
+    scan_limit = min(len(raw_data), MAX_PDF_SCAN_BYTES)
+    data = raw_data[:scan_limit]
+    parts: list[str] = []
+    idx = 0
+    while idx < scan_limit and sum(len(c) for c in parts) < max_chars:
+        s_start = data.find(b"stream", idx)
+        if s_start == -1:
+            break
+        after_s = s_start + 6
+        if after_s < scan_limit and data[after_s:after_s + 1] == b"\r":
+            after_s += 1
+        if after_s < scan_limit and data[after_s:after_s + 1] == b"\n":
+            after_s += 1
+        s_end = data.find(b"endstream", after_s)
+        if s_end == -1:
+            break
+        idx = s_end + 9
+        stream_bytes = data[after_s:s_end]
+        if len(stream_bytes) > 256 * 1024:
+            continue
         try:
-            decomp = zlib.decompress(m.group(1))
+            decomp = zlib.decompress(stream_bytes)
         except Exception:
             try:
-                decomp = zlib.decompress(m.group(1), -15)
+                decomp = zlib.decompress(stream_bytes, -15)
             except Exception:
                 decomp = None
         if decomp:
-            for tm in re.findall(rb"\((.*?)\)\s*Tj", decomp):
+            for tm in re.findall(rb"\(([^()]{1,250})\)\s*Tj", decomp):
                 try:
                     t = tm.decode("utf-8", errors="ignore")
                     if t:
                         parts.append(t)
                 except Exception:
                     pass
-        if sum(len(c) for c in parts) >= max_chars:
-            break
     res = " ".join(parts).strip()
     return (res, "스캔/이미지 PDF · 파일명 검색") if len(res) < 10 else (res[:max_chars], "")
 
@@ -291,7 +307,8 @@ def extract_document_text(path: Path | str, max_chars: int = 12000) -> tuple[str
                 return _extract_pptx(p, max_chars)
             return _extract_hwpx(p, max_chars)
         if head.startswith(b"%PDF-"):
-            return _extract_pdf(p.read_bytes(), max_chars)
+            with open(p, "rb") as pf:
+                return _extract_pdf(pf.read(MAX_PDF_SCAN_BYTES), max_chars)
         if ext in (".txt", ".md", ".csv", ".tsv", ".html", ".htm", ".json", ".log", ".ini", ".cfg"):
             return _extract_text(p.read_bytes(), ext, max_chars)
         if ext in (".hwpx", ".hwp"):
