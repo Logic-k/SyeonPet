@@ -389,13 +389,38 @@ class PetWidget(QWidget):
     def one_shot_finished(self) -> bool:
         return self._one_shot_done
 
+    def _screen_at_pet(self):
+        """Screen under the pet center; nearest screen when in a monitor gap."""
+        center = self.geometry().center()
+        screen = QGuiApplication.screenAt(center)
+        if screen is not None:
+            return screen
+        cx = center.x()
+        best, best_d = None, None
+        for s in QGuiApplication.screens():
+            g = s.availableGeometry()
+            d = 0 if g.left() <= cx <= g.right() else min(abs(cx - g.left()), abs(cx - g.right()))
+            if best_d is None or d < best_d:
+                best, best_d = s, d
+        return best or QGuiApplication.primaryScreen()
+
     def ground_y(self) -> int:
-        screen = QGuiApplication.screenAt(self.geometry().center()) or QGuiApplication.primaryScreen()
-        return screen.availableGeometry().bottom()
+        """Floor on the monitor the pet is currently standing on."""
+        return self._screen_at_pet().availableGeometry().bottom()
 
     def screen_bounds(self):
-        screen = QGuiApplication.screenAt(self.geometry().center()) or QGuiApplication.primaryScreen()
-        return screen.availableGeometry()
+        """Union of every monitor's work area — the pet may roam across screens."""
+        screens = QGuiApplication.screens()
+        if not screens:
+            return QGuiApplication.primaryScreen().availableGeometry()
+        bounds = QRect()
+        for s in screens:
+            bounds = bounds.united(s.availableGeometry())
+        return bounds
+
+    def current_screen_bounds(self):
+        """Work area of just the monitor under the pet (anchors, y clamping)."""
+        return self._screen_at_pet().availableGeometry()
 
     def sprite_rect_global(self):
         x, y, w, h = self._sprite_draw_rect()

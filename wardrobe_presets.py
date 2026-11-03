@@ -26,8 +26,15 @@ PRESETS = {
     "scarf_lavender": ("라벤더 목도리", "보랏빛 목도리로 따뜻하게 감싸요."),
     "sailor": ("바다 세일러", "아이보리 줄무늬와 작은 매듭이 있는 남색 깃이에요."),
     "cape_cozy": ("포근한 케이프", "둥근 크림색 깃을 두른 살구색 케이프예요."),
+    "cat_ears": ("고양이 귀 머리띠", "분홍 속이 보이는 깜찍한 고양이 귀예요."),
+    "party_hat": ("축하 콘모자", "알록달록 줄무늬와 폼폼이 달린 파티 모자예요."),
+    "big_ribbon": ("빵빵 리본", "화이트 도트가 콕콕 박힌 커다란 핑크 리본이에요."),
+    "crown": ("반짝 왕관", "세 가지 보석이 박힌 황금 왕관이에요."),
+    "strawberry": ("딸기 모자", "씨앗 콕콕 빨간 딸기를 뒤집어쓴 모습이에요."),
+    "hero_cape": ("정의 망토", "별이 빛나는 빨간 영웅 망토예요."),
 }
-_HEAD = {"beret", "sunhat", "ribbon_hat"}
+_HEAD = {"beret", "sunhat", "ribbon_hat", "cat_ears", "party_hat", "big_ribbon",
+         "crown", "strawberry"}
 _ASSETS = Path(__file__).resolve().parent / "assets" / "wardrobe_presets"
 _IMAGE_CACHE = {}
 _POSITION_CACHE = OrderedDict()

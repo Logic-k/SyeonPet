@@ -352,8 +352,10 @@ class ChatPanel(QWidget):
         extra_w, extra_h = max(0, frame.width() - self.width()), max(0, frame.height() - self.height())
         margin = 4
         avail_w, avail_h = max(1, bounds.width() - extra_w - 2 * margin), max(1, bounds.height() - extra_h - 2 * margin)
+        target_w = max(460, min(int(avail_w * 0.30), 640))
+        target_h = max(650, min(int(avail_h * 0.78), avail_h))
         self.setMinimumSize(min(360, avail_w), min(450, avail_h))
-        self.resize(min(self.width(), avail_w), min(self.height(), avail_h))
+        self.resize(min(target_w, avail_w), min(target_h, avail_h))
         frame = self.frameGeometry()
         x = geo.right() + 8
         if x + frame.width() > bounds.right() + 1 - margin:

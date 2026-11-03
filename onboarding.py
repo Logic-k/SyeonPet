@@ -130,7 +130,7 @@ class OnboardingTour(QObject):
         return body + f"<br><span style='color:#6b6257'>{i + 1} / {len(self.steps)}</span>"
 
     def _anchor_x(self, step: dict) -> int:
-        bounds = self.pet.screen_bounds()
+        bounds = self.pet.current_screen_bounds()
         anchor = step.get("anchor", "center")
         if anchor == "left":
             return bounds.left() + bounds.width() // 5

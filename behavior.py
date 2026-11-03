@@ -229,12 +229,20 @@ class BehaviorController(QObject):
             return not self.mode.startswith("transition:")
         return False
 
+    def _settle_ground(self) -> None:
+        """Ease onto the current monitor's floor (heights can differ across screens)."""
+        floor = self.pet.ground_y() - self.pet.height()
+        dy = floor - self.pet.y()
+        if dy:
+            self.pet.move(self.pet.x(), self.pet.y() + max(-6, min(6, dy)))
+
     def move_toward(self, target_x: int, dt: float) -> bool:
         arrived, new_vel, new_accum, step = calculate_walk_displacement(
             target_x, self.pet.x(), self._walk_accum, self._walk_velocity,
             self.WALK_SPEED, self.WALK_RAMP_SECONDS, dt)
         if arrived:
             self.pet.move(target_x, self.pet.y())
+            self._settle_ground()
             self.reset_walk()
             return True
         facing_left = new_vel < 0
@@ -251,6 +259,7 @@ class BehaviorController(QObject):
             self.pet.facing_left = self._walk_velocity < 0
         if step:
             self.pet.move(self.pet.x() + step, self.pet.y())
+            self._settle_ground()
         return False
 
     def wander(self, *, reset_count: bool = True):
@@ -453,9 +462,10 @@ class BehaviorController(QObject):
         if pet.reduced_motion:
             if self._fell:
                 pet.vx = pet.vy = 0.0
-                bounds = pet.screen_bounds()
-                pet.move(max(bounds.left(), min(pet.x(), bounds.right() - pet.width() + 1)),
-                         max(bounds.top(), min(pet.y(), bounds.bottom() - pet.height() + 1)))
+                x_bounds = pet.screen_bounds()
+                y_bounds = pet.current_screen_bounds()
+                pet.move(max(x_bounds.left(), min(pet.x(), x_bounds.right() - pet.width() + 1)),
+                         max(y_bounds.top(), min(pet.y(), y_bounds.bottom() - pet.height() + 1)))
                 self._finish_fall()
             elif not self.onboarding_active:
                 if self.mode.startswith("transition:"):

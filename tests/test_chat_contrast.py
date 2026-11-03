@@ -135,6 +135,31 @@ class ChatWindowTests(unittest.TestCase):
             self.assertEqual(self.panel.minimumHeight(), 450)
             self.assertEqual(prompt.input.toPlainText(), "보존할 입력")
 
+    def test_window_scales_with_screen_proportion(self):
+        screen = QRect(0, 0, 1920, 1040)
+        selected = {"bounds": screen, "pet": QRect(900, 800, 65, 65)}
+        fake_screen = SimpleNamespace(availableGeometry=lambda: selected["bounds"])
+        with patch.object(self.panel, "_screen_for_pet", return_value=fake_screen), \
+             patch.object(self.pet, "sprite_rect_global", side_effect=lambda: selected["pet"]):
+            self.panel.show_near_pet()
+            self.app.processEvents()
+            self.app.processEvents()
+            frame = self.panel.frameGeometry()
+            self.assertTrue(screen.contains(frame), f"frame={frame}")
+            # 1080p-class work area: grows beyond the compact 460x650 default.
+            self.assertGreaterEqual(self.panel.width(), 560)
+            self.assertGreaterEqual(self.panel.height(), 780)
+            self.assertLessEqual(self.panel.width(), 640)
+            # Compact work area: shrinks to fit instead of overflowing.
+            self.panel.close()
+            selected.update(bounds=QRect(0, 0, 400, 400), pet=QRect(170, 200, 65, 65))
+            self.panel.show_near_pet()
+            self.app.processEvents()
+            self.app.processEvents()
+            frame = self.panel.frameGeometry()
+            self.assertTrue(QRect(0, 0, 400, 400).contains(frame), f"frame={frame}")
+            self.assertLessEqual(self.panel.width(), 400)
+
     def test_shell_tab_order_and_opacity_geometry_are_stable(self):
         self.panel.resize(360, 450)
         self.panel.show()
