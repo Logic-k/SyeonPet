@@ -367,20 +367,38 @@ def keep_original_details(prompt: str, result: str, check_details: bool = True) 
         # Only one explicitly source-related paste slot is unambiguous.
         text = text.replace(placeholder, material, 1)
         inserted = True
+    try:
+        from syeonpet.privacy.detector import contains_redaction_placeholder, detect_pii
+        pii_spans = detect_pii(prompt) if prompt else []
+        has_redaction = contains_redaction_placeholder(text) or contains_redaction_placeholder(result)
+    except ImportError:
+        pii_spans = []
+        has_redaction = False
+
     output_numbers = set(_numbers(text))
+    prompt_numbers = []
+    if prompt:
+        for match in re.finditer(r"\d+(?:[.,]\d+)*", prompt, flags=re.ASCII):
+            m_start, m_end = match.start(), match.end()
+            if not any(s["start"] <= m_start and m_end <= s["end"] for s in pii_spans):
+                prompt_numbers.append(match.group())
+    prompt_numbers = _unique(prompt_numbers)
+
     # A missing pasted passage is already reattached verbatim below. Avoid
     # replacing its existing, more precise material handling with a duplicate
     # full-request warning merely because the passage contains a schedule.
     schedule_source = prompt.replace(material, "", 1) if material else prompt
-    lost = (any(number not in output_numbers for number in _numbers(prompt))
+    lost = (any(number not in output_numbers for number in prompt_numbers)
             or any(quote not in text for quote in _quotes(prompt))
             or bool(_changed_quantity_bounds(prompt, text))
             or bool(_missing_schedule(schedule_source, text)))
     if lost:
-        return (f"{text}\n\n{KEEP_ORIGINAL_HEADING}\n{prompt.strip()}",
-                ["AI 결과에서 빠지거나 바뀐 숫자·일정·문구가 있어 원래 요청을 결과 끝에 원문 그대로 붙였어요."])
+        if not (has_redaction or (pii_spans and has_redaction)):
+            return (f"{text}\n\n{KEEP_ORIGINAL_HEADING}\n{prompt.strip()}",
+                    ["AI 결과에서 빠지거나 바뀐 숫자·일정·문구가 있어 원래 요청을 결과 끝에 원문 그대로 붙였어요."])
     core = material.strip().strip('"“”')
     if core and _flat(core) not in _flat(text):
-        return (f"{text}\n\n{KEEP_MATERIAL_HEADING}\n{material}",
-                ["AI 결과에 자료 원문이 그대로 없어 결과 끝에 붙였어요."])
+        if not (has_redaction and pii_spans):
+            return (f"{text}\n\n{KEEP_MATERIAL_HEADING}\n{material}",
+                    ["AI 결과에 자료 원문이 그대로 없어 결과 끝에 붙였어요."])
     return text, (["요청에 있던 자료 원문을 자료 빈칸에 그대로 넣었어요."] if inserted else [])

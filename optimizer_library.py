@@ -148,6 +148,21 @@ class LibraryStore:
         finally:
             lock.unlock()
 
+    def delete_entry(self, entry_id: str) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock = QLockFile(str(self.path) + ".lock")
+        if not lock.tryLock(0):
+            raise OSError("다른 션 창에서 보관함을 사용 중입니다. 잠시 후 다시 시도하세요.")
+        try:
+            items = self.load()
+            remaining = [item for item in items if item.get("id") != entry_id]
+            if len(remaining) != len(items):
+                self._write(remaining)
+                return True
+            return False
+        finally:
+            lock.unlock()
+
     def _write(self, items: list[dict]) -> None:
         items = validate_library({"version": 1, "items": items})
         payload = json.dumps({"version": 1, "items": items}, ensure_ascii=False, indent=2).encode("utf-8")
@@ -183,6 +198,7 @@ class LibraryDialog(QDialog):
         layout.addWidget(self.preview, 2)
         row = QHBoxLayout()
         for label, callback in (("현재 작업 저장", self._save), ("선택 항목 불러오기", self._restore),
+                                ("선택 삭제", self.delete_item),
                                 ("JSON 백업", self._export), ("JSON 가져오기", self._import)):
             button = QPushButton(label)
             button.clicked.connect(callback)
@@ -254,6 +270,30 @@ class LibraryDialog(QDialog):
                 self.accept()
         box.finished.connect(done)
         box.open()
+
+    def delete_item(self):
+        row = self.entries.currentRow()
+        if not 0 <= row < len(self.items):
+            self._notify("항목 선택", "삭제할 항목을 먼저 선택해 주세요.")
+            return
+        item = self.items[row]
+        box = QMessageBox(QMessageBox.Icon.Question, "선택 항목 삭제",
+                          f"선택한 항목 '{item.get('title') or item.get('prompt')[:20]}'을(를) 보관함에서 삭제할까요?",
+                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+        self._dialogs.append(box)
+        def done(result):
+            self._dialogs.remove(box)
+            if result == QMessageBox.StandardButton.Yes:
+                try:
+                    self.store.delete_entry(item["id"])
+                    self._refresh()
+                    self._notify("삭제 완료", "선택한 항목을 보관함에서 삭제했습니다.")
+                except (OSError, ValueError) as exc:
+                    self._notify("삭제 실패", f"보관함 항목을 삭제하지 못했습니다.\n{exc}", QMessageBox.Icon.Warning)
+        box.finished.connect(done)
+        box.open()
+
+    _delete = delete_item
 
     def _file_dialog(self, title, save, handler):
         dialog = QFileDialog(self, title)

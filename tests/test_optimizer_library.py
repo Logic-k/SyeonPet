@@ -94,6 +94,32 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(captured[0]["syeonRevisions"], ["추가 조건"])
         app.processEvents()
 
+    def test_delete_entry_and_dialog_delete_item(self):
+        from optimizer_library import LibraryDialog
+        app = QApplication.instance() or QApplication([])
+        first_item = item(id="del-1", prompt="삭제할 항목")
+        self.store.merge([first_item])
+        self.assertEqual(len(self.store.load()), 1)
+
+        with patch("optimizer_library.LibraryStore", return_value=self.store):
+            dialog = LibraryDialog(None, "원문", "결과")
+        self.addCleanup(dialog.close)
+
+        dialog.entries.setCurrentRow(-1)
+        dialog.delete_item()
+        dialog._dialogs[-1].done(QMessageBox.StandardButton.Ok)
+
+        dialog.entries.setCurrentRow(0)
+        dialog.delete_item()
+        dialog._dialogs[-1].done(QMessageBox.StandardButton.No)
+        self.assertEqual(len(self.store.load()), 1)
+
+        dialog.delete_item()
+        dialog._dialogs[-1].done(QMessageBox.StandardButton.Yes)
+        dialog._dialogs[-1].done(QMessageBox.StandardButton.Ok)
+        self.assertEqual(self.store.load(), [])
+        app.processEvents()
+
     def test_emoji_title_uses_utf16_limit(self):
         from optimizer_library import LibraryDialog
         app = QApplication.instance() or QApplication([])

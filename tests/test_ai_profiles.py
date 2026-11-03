@@ -17,7 +17,7 @@ class ProfileTests(unittest.TestCase):
         self.profile = profiles.AIProfile("default", "chatgpt-subscription", "auto")
 
     def test_missing_file_defaults_only_to_subscription(self):
-        self.assertEqual(profiles.load_profiles(self.path), [self.profile])
+        self.assertEqual(profiles.load_profiles(self.path), [])
         self.assertFalse(self.path.exists())
         with self.assertRaises(FrozenInstanceError):
             self.profile.model = "different"

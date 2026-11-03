@@ -260,7 +260,14 @@ class CompanionTests(unittest.TestCase):
                 return value
             def exercise(first):
                 menu = tray.setContextMenu.call_args.args[0]
-                actions = {action.text(): action for action in menu.actions()}
+                def collect_actions(m):
+                    res = {}
+                    for a in m.actions():
+                        res[a.text()] = a
+                        if a.menu():
+                            res.update(collect_actions(a.menu()))
+                    return res
+                actions = collect_actions(menu)
                 status = next(action for action in menu.actions()
                               if isinstance(action, main.QWidgetAction))
                 self.assertEqual(status.text(), status.defaultWidget().text())

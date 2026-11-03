@@ -275,10 +275,11 @@ def _temporary_retry_delay(status, retry_after, attempt=0):
     return max(1, seconds) if seconds <= 3 else None
 
 
-def _send(url, model, payload, provider):
+def _send(url, model, payload, provider, *, system_prompt: str | None = None):
+    active_system = system_prompt if system_prompt is not None else SYSTEM
     body = json.dumps({
         "model": model,
-        "messages": [{"role": "system", "content": SYSTEM},
+        "messages": [{"role": "system", "content": active_system},
                      {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
         "stream": False,
     }, ensure_ascii=False).encode("utf-8")
@@ -371,7 +372,8 @@ def _send(url, model, payload, provider):
 
 def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vireonix",
                 revision="", previous_result="", *, profile: AIProfile | None = None,
-                cancel: threading.Event | None = None) -> dict:
+                cancel: threading.Event | None = None,
+                system_prompt: str | None = None) -> dict:
     """Rewrite explicitly supplied text; synchronous, use a worker thread.
 
     Pollinations concurrency and cooldown are per process; the provider can
@@ -402,7 +404,8 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
 
         started = time.perf_counter()
         try:
-            result = generate(profile, SYSTEM, payload, cancel=cancel)
+            active_system = system_prompt if system_prompt is not None else SYSTEM
+            result = generate(profile, active_system, payload, cancel=cancel)
         except ValueError as exc:
             raise OptimizationError(str(exc)) from exc
         if cancel is not None and cancel.is_set():
@@ -419,12 +422,12 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
                 remaining = max(1, int(30 - (now - _poll_last_started) + 0.999))
                 raise OptimizationError(f"Pollinations Classic 요청 간격을 지키기 위해 {remaining}초 후 다시 시도해 주세요.")
             _poll_last_started = now
-            result = _send(url, model, payload, provider)
+            result = _send(url, model, payload, provider, system_prompt=system_prompt)
         finally:
             _poll_lock.release()
     else:
         url, model = _PROVIDERS[provider]
-        result = _send(url, model, payload, provider)
+        result = _send(url, model, payload, provider, system_prompt=system_prompt)
         if provider == "vireonix":
             result = _unwrap_vireonix(result, prompt)
     # A revision may change values on purpose, so only a first rewrite gets

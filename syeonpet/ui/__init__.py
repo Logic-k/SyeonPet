@@ -1,0 +1,1 @@
+"""SyeonPet modular subpackage."""

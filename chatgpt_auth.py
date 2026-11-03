@@ -29,6 +29,21 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import uuid
 
 import ai_secrets
+from syeonpet.ai.oauth_transport import (
+    ChatGPTError,
+    CancelledError,
+    AuthenticationError,
+    ProtocolError,
+    NetworkError,
+    UsageLimitError,
+    _check_cancel,
+    _json,
+    _b64,
+    _validated_url,
+    _PublicHTTPS,
+    _sse,
+    execute_http_request,
+)
 
 ISSUER = "https://auth.openai.com"
 RESOURCE = "https://api.openai.com/v1"
@@ -44,30 +59,6 @@ _MAX_BYTES = 4_000_000
 _store = ai_secrets
 
 
-class ChatGPTError(ValueError):
-    """Sanitized, user-displayable boundary error."""
-
-
-class CancelledError(ChatGPTError):
-    pass
-
-
-class AuthenticationError(ChatGPTError):
-    pass
-
-
-class ProtocolError(ChatGPTError):
-    pass
-
-
-class NetworkError(ChatGPTError):
-    pass
-
-
-class UsageLimitError(ChatGPTError):
-    pass
-
-
 @dataclass(frozen=True)
 class AccountInfo:
     id: str
@@ -75,11 +66,6 @@ class AccountInfo:
     workspace_label: str
     connected: bool
     credential_revision: int
-
-
-def _check_cancel(cancel):
-    if cancel is not None and cancel.is_set():
-        raise CancelledError("ChatGPT operation cancelled.")
 
 
 @contextmanager
@@ -141,163 +127,11 @@ def _save_credentials(key, value, cancel):
         raise CancelledError("ChatGPT operation cancelled.")
 
 
-def _json(data):
-    try:
-        result = json.loads(data)
-        if not isinstance(result, dict):
-            raise ValueError()
-        return result
-    except (ValueError, UnicodeError, TypeError):
-        raise ProtocolError("Invalid ChatGPT service response.") from None
-
-
-def _validated_url(url):
-    try:
-        parsed = urlsplit(url)
-        valid = (parsed.scheme == "https" and parsed.hostname in
-                 ("auth.openai.com", "api.openai.com") and parsed.port in (None, 443)
-                 and not parsed.username and not parsed.password and not parsed.fragment)
-    except (ValueError, TypeError):
-        valid = False
-    if not valid:
-        raise ProtocolError("Unsupported ChatGPT service address.")
-    return parsed
-
-
-class _PublicHTTPS(http.client.HTTPSConnection):
-    """Resolve once, reject private addresses, connect to the checked address."""
-
-    def connect(self):
-        resolved = threading.Event()
-        resolution = {}
-
-        def resolve():
-            try:
-                resolution["addresses"] = socket.getaddrinfo(
-                    self.host, 443, type=socket.SOCK_STREAM)
-            except OSError:
-                resolution["error"] = True
-            finally:
-                resolved.set()
-
-        threading.Thread(target=resolve, daemon=True).start()
-        deadline = time.monotonic() + 15
-        while not resolved.wait(0.05):
-            if (getattr(self, "abort", None) is not None and self.abort.is_set()
-                    or time.monotonic() >= deadline):
-                raise NetworkError("ChatGPT service address lookup stopped.")
-        addresses = resolution.get("addresses", [])
-        if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global
-                                for a in addresses):
-            raise NetworkError("ChatGPT service address is unavailable.")
-        last = None
-        for family, socktype, proto, _, address in addresses:
-            sock = socket.socket(family, socktype, proto)
-            sock.settimeout(self.timeout)
-            self.sock = sock
-            try:
-                if getattr(self, "abort", None) is not None and self.abort.is_set():
-                    raise NetworkError("ChatGPT connection stopped.")
-                sock.connect(address)
-                self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-                if getattr(self, "abort", None) is not None and self.abort.is_set():
-                    raise NetworkError("ChatGPT connection stopped.")
-                return
-            except OSError as exc:
-                last = exc
-                sock.close()
-        raise NetworkError("Could not connect to ChatGPT.") from last
-
-
 def _http(method, url, *, form=None, body=None, token=None, cancel=None, consume=None):
-    _check_cancel(cancel)
-    parsed = _validated_url(url)
-    connection = _PublicHTTPS(parsed.hostname, timeout=15,
-                              context=ssl.create_default_context())
-    connection.abort = threading.Event()
-    headers = {"Accept": "text/event-stream" if consume else "application/json"}
-    data = None
-    if form is not None:
-        data = urlencode(form).encode("ascii")
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-    elif body is not None:
-        data = json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    if token is not None:
-        headers["Authorization"] = "Bearer " + token
-    done = threading.Event()
-    timed_out = threading.Event()
-
-    def close():
-        connection.abort.set()
-        sock = connection.sock
-        if sock is not None:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-        connection.close()
-
-    def guard():
-        deadline = time.monotonic() + _TIMEOUT
-        while not done.wait(0.05):
-            if cancel is not None and cancel.is_set():
-                close()
-                return
-            if time.monotonic() >= deadline:
-                timed_out.set()
-                close()
-                return
-
-    watcher = threading.Thread(target=guard, daemon=True)
-    watcher.start()
-    try:
-        connection.request(method, parsed.path + ("?" + parsed.query if parsed.query else ""),
-                           body=data, headers=headers)
-        response = connection.getresponse()
-        _check_cancel(cancel)
-        if response.status in (401, 403):
-            raise AuthenticationError("ChatGPT authorization is required.")
-        if response.status == 429:
-            raise UsageLimitError("ChatGPT usage is currently limited.")
-        if response.status < 200 or response.status >= 300:
-            raise NetworkError("ChatGPT service request failed.")
-        if consume:
-            media_type = response.getheader("Content-Type", "").split(";", 1)[0].strip().lower()
-            if media_type != "text/event-stream":
-                # Never include an arbitrary response header or body in the error.
-                # These fixed categories help diagnose a subsequent synthetic request.
-                category = {"application/json": "JSON", "text/html": "HTML",
-                            "": "missing Content-Type"}.get(media_type, "other Content-Type")
-                raise ProtocolError(f"ChatGPT did not return an event stream ({category}).")
-            result = consume(response, cancel)
-        else:
-            raw = response.read(_MAX_BYTES + 1)
-            if len(raw) > _MAX_BYTES:
-                raise ProtocolError("ChatGPT response exceeded the size limit.")
-            result = _json(raw) if raw else {}
-        _check_cancel(cancel)
-        if timed_out.is_set():
-            raise NetworkError("ChatGPT request timed out.")
-        return result
-    except (OSError, http.client.HTTPException, UnicodeError, ValueError) as exc:
-        _check_cancel(cancel)
-        if isinstance(exc, ChatGPTError):
-            raise
-        raise NetworkError("ChatGPT connection failed.") from None
-    finally:
-        done.set()
-        close()
-        watcher.join()
-
-
-def _b64(value):
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
-        raise ProtocolError("Invalid ChatGPT identity token.")
-    try:
-        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    except ValueError:
-        raise ProtocolError("Invalid ChatGPT identity token.") from None
+    return execute_http_request(
+        method, url, form=form, body=body, token=token, cancel=cancel,
+        consume=consume, https_cls=_PublicHTTPS, timeout=_TIMEOUT, max_bytes=_MAX_BYTES
+    )
 
 
 def _verify_id_token(token, client_id, nonce, cancel=None):
@@ -586,6 +420,15 @@ def list_models(account_id, *, cancel=None):
                      token=_access(account_id, cancel), cancel=cancel)
     models = response.get("models")
     if not isinstance(models, list):
+        data = response.get("data")
+        if isinstance(data, list):
+            result = []
+            for item in data:
+                if isinstance(item, dict) and "id" in item:
+                    model_id = item["id"]
+                    label = item.get("display_name") or model_id
+                    result.append({"id": model_id, "label": label})
+            return result
         raise ProtocolError("Invalid ChatGPT model catalog.")
     result = []
     for model in models:
@@ -597,55 +440,6 @@ def list_models(account_id, *, cancel=None):
                 raise ProtocolError("Invalid ChatGPT model catalog.")
             result.append({"id": model["slug"], "label": model["display_name"]})
     return result
-
-
-def _sse(response, cancel):
-    total, parts, event, data = 0, [], "", []
-    while True:
-        _check_cancel(cancel)
-        line = response.readline(262145)
-        total += len(line)
-        if total > _MAX_BYTES or len(line) > 262144:
-            raise ProtocolError("ChatGPT stream exceeded the size limit.")
-        if not line:
-            raise ProtocolError("ChatGPT stream ended before completion.")
-        try:
-            text = line.decode("utf-8").rstrip("\r\n")
-        except UnicodeError:
-            raise ProtocolError("Invalid ChatGPT event stream.") from None
-        if text == "":
-            if not data:
-                event = ""
-                continue
-            message = _json("\n".join(data))
-            kind = message.get("type", event)
-            if event and kind != event:
-                raise ProtocolError("Conflicting ChatGPT event type.")
-            if kind == "response.output_text.delta":
-                if not isinstance(message.get("delta"), str):
-                    raise ProtocolError("Invalid ChatGPT text delta.")
-                parts.append(message["delta"])
-            elif kind == "response.completed":
-                completed = message.get("response")
-                if not isinstance(completed, dict) or completed.get("status") != "completed":
-                    raise ProtocolError("ChatGPT response was not completed.")
-                _check_cancel(cancel)
-                return "".join(parts)
-            elif kind in ("response.failed", "response.incomplete", "error"):
-                response_data = message.get("response", {})
-                if not isinstance(response_data, dict):
-                    raise ProtocolError("Invalid ChatGPT failure event.")
-                error = response_data.get("error") or message.get("error") or {}
-                if isinstance(error, dict) and error.get("code") in (
-                        "subscription_sharing_usage_limit_exceeded",
-                        "subscription_sharing_usage_unavailable"):
-                    raise UsageLimitError("ChatGPT subscription usage is unavailable.")
-                raise ProtocolError("ChatGPT did not complete the response.")
-            event, data = "", []
-        elif text.startswith("data:"):
-            data.append(text[5:].removeprefix(" "))
-        elif text.startswith("event:"):
-            event = text[6:].strip()
 
 
 def generate(account_id, model, instructions, payload, *, cancel=None):

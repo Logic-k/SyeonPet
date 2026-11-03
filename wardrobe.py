@@ -358,6 +358,12 @@ class WardrobeWindow(QWidget):
         self.move(max(bounds.left() + 4, min(frame.x(), bounds.right() + 1 - frame.width() - 4)),
                   max(bounds.top() + 4, min(frame.y(), bounds.bottom() + 1 - frame.height() - 4)))
 
+    def show_near_pet(self) -> None:
+        self.show()
+        self._fit_to_work_area()
+        self.raise_()
+        self.activateWindow()
+
     def showEvent(self, event):
         super().showEvent(event)
         self._fit_to_work_area()

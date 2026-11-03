@@ -84,7 +84,7 @@ def load_profiles(path: str | os.PathLike | None = None) -> list[AIProfile]:
         with target.open("rb") as stream:
             raw = stream.read(1_000_001)
     except FileNotFoundError:
-        return [AIProfile("default", "chatgpt-subscription", "auto")]
+        return []
     except OSError:
         raise ValueError("Could not read AI profiles.") from None
     try:

@@ -1,13 +1,21 @@
 """Behavior state machine — wander / idle / sleep / drag-fall / one-shot actions."""
 from __future__ import annotations
 
+import math
 import random
 import time
-import math
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from pet import PetWidget
+from syeonpet.pet.behavior_bridges import (
+    calculate_walk_displacement,
+    calculate_wander_target,
+    resolve_deep_sleep_start_frame,
+    resolve_sleep_bridge,
+    resolve_wake_start_frame,
+    restore_thinking_snapshot,
+)
 
 
 class BehaviorController(QObject):
@@ -17,45 +25,38 @@ class BehaviorController(QObject):
     wave, celebrate, and the onboarding tour (which owns the pet while active).
     """
 
-    WALK_SPEED = 190  # px/s
-    WALK_SPEED_SLOW = 80
-    WALK_RAMP_SECONDS = 0.25
+    WALK_SPEED, WALK_SPEED_SLOW, WALK_RAMP_SECONDS = 190, 80, 0.25
     THINKING_MIN_SECONDS = 0.8
-    AUTO_NAP_SECONDS = (60.0, 120.0)  # lying-down part of a self-chosen nap
-    AUTO_NAP_SECONDS_SLOW = (120.0, 240.0)
-    fully_asleep_changed = Signal(bool)
+    AUTO_NAP_SECONDS, AUTO_NAP_SECONDS_SLOW = (60.0, 120.0), (120.0, 240.0)
 
-    def __init__(self, pet: PetWidget):
+    fully_asleep_changed = Signal(bool)
+    hub_requested = Signal()
+
+    def __init__(self, pet: PetWidget, click_actions: dict | None = None):
         super().__init__()
         self.pet = pet
-        self.mode = "idle"
-        self.slow = False
+        self.mode, self.slow = "idle", False
         self.base_walk_speed = self.WALK_SPEED
-        self.target_x = 0
+        self.target_x, self.idle_ticks = 0, 0
         self.mode_until = time.monotonic() + 2.0
-        self.idle_ticks = 0
-        self.onboarding_active = False
-        self._fell = False
+        self.onboarding_active, self._fell = False, False
         self._last_tick_time = time.monotonic()
-        self._walk_accum = 0.0
-        self._walk_velocity = 0.0
+        self._walk_accum, self._walk_velocity = 0.0, 0.0
         self._dance_cycle_target = 0
         self._transition_to: dict | None = None
-        self._deep_state = "liesleep"
-        self._fully_asleep = False
-        # Sleep the pet chose for itself ends on its own; sleep the user asked
-        # for (menu, double click) still lasts until the user wakes it.
-        self._auto_nap = False
-        self._pre_fall_mode = "idle"
-        self._pre_drag_state = "idle"
-        # A request may be interrupted by a user action.  Only restore the
-        # saved state while this controller still owns the thinking pose.
+        self._deep_state, self._fully_asleep, self._auto_nap = "liesleep", False, False
+        self._pre_fall_mode, self._pre_drag_state = "idle", "idle"
         self._thinking_restore: dict | None = None
         self._thinking_started = 0.0
-        self._thinking_finish_pending = False
-        self._thinking_generation = 0
-        # gesture -> action name mapping (see run_action table)
-        self.click_actions = {"click": "wave", "double_click": "sleep"}
+        self._thinking_finish_pending, self._thinking_generation = False, 0
+
+        # Preserve exact default click actions regression invariant
+        if click_actions is None:
+            self.click_actions = {"click": "wave", "single_click": "wave", "double_click": "sleep"}
+        else:
+            self.click_actions = dict(click_actions)
+            if "click" not in self.click_actions and "single_click" in self.click_actions:
+                self.click_actions["click"] = self.click_actions["single_click"]
 
         self.pet.clicked.connect(self._on_clicked)
         self.pet.double_clicked.connect(self._on_double_clicked)
@@ -67,19 +68,10 @@ class BehaviorController(QObject):
         self.timer.timeout.connect(self._tick)
         self.timer.start()
 
-    # ---------- public ----------
-
     def begin_thinking(self):
-        """Show a temporary pose while a prompt request is running.
-
-        Completely still sleep blocks requests; lighter sleep can briefly
-        show the pose and is restored afterwards. Never take over a drag/tour.
-        Calling it twice for one request is harmless.
-        """
+        """Show a temporary pose while a prompt request is running."""
         if self._thinking_restore is not None:
             if self._thinking_finish_pending:
-                # A new request began before the short visual tail finished.
-                # Keep the original snapshot, not the transient thinking pose.
                 self._thinking_generation += 1
                 self._thinking_finish_pending = False
                 self._thinking_started = time.monotonic()
@@ -117,16 +109,13 @@ class BehaviorController(QObject):
         if remaining > 0:
             self._thinking_finish_pending = True
             self._thinking_generation += 1
-            generation = self._thinking_generation
-            QTimer.singleShot(max(1, math.ceil(remaining * 1000)),
-                              lambda: self._finish_thinking(generation))
+            gen = self._thinking_generation
+            QTimer.singleShot(max(1, math.ceil(remaining * 1000)), lambda: self._finish_thinking(gen))
             return
         self._finish_thinking()
 
     def _finish_thinking(self, generation=None):
-        """Restore only if the request still owns the pose."""
-        if generation is not None and (generation != self._thinking_generation
-                                       or not self._thinking_finish_pending):
+        if generation is not None and (generation != self._thinking_generation or not self._thinking_finish_pending):
             return
         self._thinking_generation += 1
         self._thinking_finish_pending = False
@@ -134,41 +123,9 @@ class BehaviorController(QObject):
         if (saved is None or self.mode != "thinking" or self.onboarding_active
                 or self._fell or self.pet._dragging or self.fully_asleep):
             return
-        if not self.pet.sprites.has(saved["state"]):
-            # A pack can be changed while a request owns the temporary pose.
-            # A missing connecting row still has a valid public destination;
-            # in particular, changing clothing must not wake a sleeping pet.
-            destination = saved.get("transition_to")
-            if destination and self.pet.sprites.has(destination["state"]):
-                self._transition_to = destination
-                self.idle_ticks = saved["idle_ticks"]
-                self.target_x = saved["target_x"]
-                self.reset_walk()
-                self._finish_transition()
-                return
-            # Do not restore an optional one-shot or its cursor without its row.
-            self.idle(reset_count=False)
-            return
-        self.mode = saved["mode"]
-        self.mode_until = time.monotonic() + saved["remaining"]
-        self.idle_ticks = saved["idle_ticks"]
-        self.target_x = saved["target_x"]
-        self._walk_accum = saved["walk_accum"]
-        self._walk_velocity = saved["walk_velocity"]
-        self._dance_cycle_target = saved["dance_cycle_target"]
-        self._transition_to = saved["transition_to"]
-        self.pet.set_state(saved["state"])
-        self.pet._completed_cycles = saved["completed_cycles"]
-        metadata = self.pet._animation_meta()
-        self.pet.frame_idx = min(saved["frame_idx"], len(metadata["frames"]) - 1)
-        self.pet._frame_elapsed = min(saved["frame_elapsed"],
-                                     metadata["durations"][self.pet.frame_idx] * self.pet.time_scale)
-        self.pet._one_shot_done = saved["one_shot_done"]
-        self.pet._update_mask()
-        self.pet.update()
+        restore_thinking_snapshot(self, saved)
 
     def _interrupt_thinking(self):
-        """Forget the snapshot when the user explicitly chooses a new action."""
         self._thinking_generation += 1
         self._thinking_finish_pending = False
         self._thinking_restore = None
@@ -176,12 +133,10 @@ class BehaviorController(QObject):
 
     @property
     def fully_asleep(self) -> bool:
-        """The explicit motionless sleep mode, including while being dragged."""
         return self._fully_asleep
 
     @property
     def sleeping(self) -> bool:
-        """Whether the current or temporarily interrupted state is sleep."""
         if self.fully_asleep or self.mode in ("sleep", "deepsleep"):
             return True
         if self.mode.startswith("transition:") and self._transition_to:
@@ -200,13 +155,11 @@ class BehaviorController(QObject):
             self.fully_asleep_changed.emit(asleep)
 
     def wake(self):
-        """Wake explicitly without erasing either conversation's draft."""
         if self.sleeping:
             self._pre_fall_mode = "idle"
             self.idle(3.0)
 
     def toggle_sleep(self):
-        """Honor wake requests even when thinking briefly hides sleep."""
         if self.sleeping:
             self._pre_fall_mode = "idle"
             self.idle(1.0)
@@ -214,7 +167,6 @@ class BehaviorController(QObject):
             self.sleep()
 
     def set_slow(self, on: bool):
-        """Calm mode: slower walk, slower sprite playback, longer rests."""
         self.slow = on
         self.WALK_SPEED = self.WALK_SPEED_SLOW if on else self.base_walk_speed
         self.pet.time_scale = 1.7 if on else 1.0
@@ -222,36 +174,18 @@ class BehaviorController(QObject):
             self.idle()
 
     def reset_walk(self):
-        """Discard movement momentum when another interaction takes over."""
         self._walk_accum = 0.0
         self._walk_velocity = 0.0
 
     def _wake_start_frame(self) -> int:
-        source, frame = self.pet.state, self.pet.frame_idx
-        if self.mode == "thinking" and self._thinking_restore:
-            source = self._thinking_restore["state"]
-            frame = self._thinking_restore["frame_idx"]
-        if source == "sleep":
-            return 3
-        if source == "sleep_bridge":
-            return max(0, 5 - frame)
-        if source == "wake_bridge":
-            return frame
-        return 0
+        return resolve_wake_start_frame(self.pet.state, self.pet.frame_idx, self._thinking_restore)
 
     def _set_pose(self, mode: str, state: str, *, seconds: float | None = None,
-                  bridge: str | None = None, start_frame: int = 0,
-                  end_frame: int | None = None):
-        """Play an optional connecting row before entering a public action.
-
-        The destination is data so thinking can pause it, while a new user
-        action or a drag can discard it without a delayed callback firing.
-        """
+                  bridge: str | None = None, start_frame: int = 0, end_frame: int | None = None):
         self._transition_to = None
         if (bridge and self.pet.sprites.has(bridge) and not self.pet.reduced_motion
                 and not self.pet._dragging and not self._fell):
-            self._transition_to = {"mode": mode, "state": state, "seconds": seconds,
-                                   "end_frame": end_frame}
+            self._transition_to = {"mode": mode, "state": state, "seconds": seconds, "end_frame": end_frame}
             self.mode = f"transition:{mode}"
             if self.pet.state == bridge:
                 self.pet.set_state("idle")
@@ -287,60 +221,32 @@ class BehaviorController(QObject):
             self.pet.play_transition("walk_stop")
 
     def advance_transition(self) -> bool:
-        """Finish a bridge at its last intended pose; also used by the tour."""
         if not self.mode.startswith("transition:"):
             return True
         end_frame = self._transition_to.get("end_frame") if self._transition_to else None
-        if (self.pet.one_shot_finished()
-                or (end_frame is not None and self.pet.frame_idx > end_frame)):
+        if self.pet.one_shot_finished() or (end_frame is not None and self.pet.frame_idx > end_frame):
             self._finish_transition()
             return not self.mode.startswith("transition:")
         return False
 
     def move_toward(self, target_x: int, dt: float) -> bool:
-        """Move with a short acceleration/braking phase; retain subpixels.
-
-        Both wandering and the tour use the same elapsed-time movement. A
-        changed target first brakes the old direction before the pet turns.
-        """
-        if not math.isfinite(dt) or dt <= 0:
-            return target_x == self.pet.x() and not self._walk_accum
-        dt = min(dt, 0.05)
-        distance = target_x - self.pet.x() - self._walk_accum
-        if abs(distance) < 0.01:
+        arrived, new_vel, new_accum, step = calculate_walk_displacement(
+            target_x, self.pet.x(), self._walk_accum, self._walk_velocity,
+            self.WALK_SPEED, self.WALK_RAMP_SECONDS, dt)
+        if arrived:
             self.pet.move(target_x, self.pet.y())
             self.reset_walk()
             return True
-        if not math.isfinite(self.WALK_SPEED) or self.WALK_SPEED <= 0:
-            self.reset_walk()
-            return False
-        acceleration = self.WALK_SPEED / self.WALK_RAMP_SECONDS
-        # Start braking before the ideal stopping distance to allow for the
-        # next discrete timer step without snapping the final stride short.
-        desired = math.copysign(min(self.WALK_SPEED,
-                                   math.sqrt(1.5 * acceleration * abs(distance))), distance)
-        previous = self._walk_velocity
-        change = max(-acceleration * dt, min(desired - previous, acceleration * dt))
-        self._walk_velocity += change
-        facing_left = self._walk_velocity < 0
-        if (self.pet.state == "walk" and abs(self._walk_velocity) > 0.01
+        facing_left = new_vel < 0
+        if (self.pet.state == "walk" and abs(new_vel) > 0.01
                 and facing_left != self.pet.facing_left and self.pet.sprites.has("turn_front")
                 and self.pet.sprites.has("turn_bridge")):
-            # Brake to a standstill before turning through the front pose.
-            # Mirroring only that front pose avoids flipping a side-view
-            # stride in the middle of a step.
             self.reset_walk()
             self._set_pose("walk", "walk", bridge="turn_front")
             self._transition_to.update(next_bridge="turn_bridge", facing_left=facing_left)
             return False
-        displacement = (previous + self._walk_velocity) * 0.5 * dt
-        if displacement * distance > 0 and abs(displacement) >= abs(distance):
-            self.pet.move(target_x, self.pet.y())
-            self.reset_walk()
-            return True
-        self._walk_accum += displacement
-        step = math.trunc(self._walk_accum)
-        self._walk_accum -= step
+        self._walk_velocity = new_vel
+        self._walk_accum = new_accum
         if abs(self._walk_velocity) > 0.01:
             self.pet.facing_left = self._walk_velocity < 0
         if step:
@@ -354,17 +260,9 @@ class BehaviorController(QObject):
         self._set_fully_asleep(False)
         if reset_count:
             self.idle_ticks = 0
-        bounds = self.pet.screen_bounds()
-        left = bounds.left() + 10
-        right = bounds.right() - self.pet.width() - 10
-        if right < left:
-            # A narrow work area cannot fit both margins (or the whole pet).
-            left = bounds.left()
-            right = max(left, bounds.right() - self.pet.width() + 1)
-        self.target_x = random.randint(left, right)
+        self.target_x = calculate_wander_target(self.pet.screen_bounds(), self.pet.width())
         if self.mode != "walk":
             self.reset_walk()
-        if self.mode != "walk":
             self.pet.facing_left = self.target_x < self.pet.x()
         self._set_pose("walk", "walk", bridge="turn_bridge" if self.pet.state != "walk" else None)
         if self.mode == "walk":
@@ -379,40 +277,25 @@ class BehaviorController(QObject):
         self._set_fully_asleep(False)
         if reset_count:
             self.idle_ticks = 0
-        rest = seconds or (random.uniform(9.0, 16.0) if self.slow
-                           else random.uniform(2.5, 6.0))
-        bridge = "turn_front" if was_walking else (
-            "wake_bridge" if was_sleeping else None)
-        self._set_pose("idle", "idle", seconds=rest, bridge=bridge,
-                       start_frame=wake_frame)
+        rest = seconds or (random.uniform(9.0, 16.0) if self.slow else random.uniform(2.5, 6.0))
+        bridge = "turn_front" if was_walking else ("wake_bridge" if was_sleeping else None)
+        self._set_pose("idle", "idle", seconds=rest, bridge=bridge, start_frame=wake_frame)
         if was_walking and self.mode == "idle":
             self.pet.play_transition("walk_stop")
 
     def sleep(self):
-        source = self.pet.state
-        source_frame = self.pet.frame_idx
+        source, source_frame = self.pet.state, self.pet.frame_idx
         self.reset_walk()
         self._interrupt_thinking()
         self._set_fully_asleep(False)
         self._auto_nap = False
         self.idle_ticks = 0
-        rising_to_sit = source in ("liesleep", "still") or (
-            source == "wake_bridge" and source_frame <= 3) or (
-            source == "sleep_bridge" and source_frame > 2)
-        bridge = "wake_bridge" if rising_to_sit else "sleep_bridge"
-        start_frame = 0
-        if source in ("sleep_bridge", "wake_bridge"):
-            start_frame = source_frame if source == bridge else 5 - source_frame
+        bridge, start_frame, end_frame = resolve_sleep_bridge(source, source_frame)
         self._set_pose("sleep", "sleep", seconds=45.0,
                        bridge=bridge if source != "sleep" else None,
-                       start_frame=start_frame,
-                       end_frame=3 if bridge == "wake_bridge" else 2)
+                       start_frame=start_frame, end_frame=end_frame)
 
     def deep_sleep(self, *, nap: bool = False):
-        """Lying-down sleep — stays put, no wander, until woken.
-
-        A self-chosen nap (`nap`) wakes on its own after AUTO_NAP_SECONDS.
-        """
         self._interrupt_thinking()
         self.reset_walk()
         self._set_fully_asleep(False)
@@ -420,9 +303,7 @@ class BehaviorController(QObject):
         self.idle_ticks = 0
         self._deep_state = "liesleep"
         source = self.pet.state
-        start_frame = (3 if source == "sleep" else
-                       5 - self.pet.frame_idx if source == "wake_bridge" else
-                       self.pet.frame_idx if source == "sleep_bridge" else 0)
+        start_frame = resolve_deep_sleep_start_frame(source, self.pet.frame_idx)
         low, high = self.AUTO_NAP_SECONDS_SLOW if self.slow else self.AUTO_NAP_SECONDS
         self._set_pose("deepsleep", "liesleep",
                        seconds=random.uniform(low, high) if nap else None,
@@ -430,7 +311,6 @@ class BehaviorController(QObject):
                        start_frame=start_frame)
 
     def still_sleep(self):
-        """Completely motionless flop — nothing moves until woken."""
         self._interrupt_thinking()
         self.reset_walk()
         self._auto_nap = False
@@ -453,11 +333,9 @@ class BehaviorController(QObject):
         self.mode_until = time.monotonic() + seconds
         metadata = self.pet._animation_meta()
         cycle_ms = sum(metadata["durations"]) * self.pet.time_scale
-        self._dance_cycle_target = self.pet._completed_cycles + max(
-            1, math.ceil(seconds * 1000 / max(1.0, cycle_ms)))
+        self._dance_cycle_target = self.pet._completed_cycles + max(1, math.ceil(seconds * 1000 / max(1.0, cycle_ms)))
 
     def play_one_shot(self, state: str, then: str = "idle"):
-        """wave / celebrate; returns to `then` when the strip finishes."""
         if self.pet.reduced_motion or not self.pet.sprites.has(state):
             return
         self._interrupt_thinking()
@@ -469,7 +347,6 @@ class BehaviorController(QObject):
         self.pet.set_state(state)
 
     def can_play_extra_motion(self, state: str) -> bool:
-        """Optional gestures never interrupt work, sleep, a tour or a drag."""
         return (state in ("stretch", "bow") and self.pet.sprites.has(state)
                 and not self.pet.reduced_motion and not self.sleeping
                 and not self.onboarding_active and not self.pet._dragging
@@ -478,7 +355,6 @@ class BehaviorController(QObject):
     def play_extra_motion(self, state: str) -> bool:
         if not self.can_play_extra_motion(state):
             return False
-        # Selecting the same gesture again starts a fresh one-shot.
         if self.pet.state == state:
             self.pet.set_state("idle")
         self.play_one_shot(state)
@@ -497,21 +373,22 @@ class BehaviorController(QObject):
             "still": self.still_sleep,
             "idle": self.idle,
             "wander": self.wander,
+            "open_hub": lambda: self.hub_requested.emit(),
         }
         fn = table.get(name)
         if fn:
             fn()
 
-    # ---------- events ----------
+    def _run_click_action(self, action_name: str) -> None:
+        if action_name == "open_hub":
+            self.hub_requested.emit()
+        else:
+            self.run_action(action_name)
 
     def _on_drag_started(self):
-        # This can arrive before the next timer tick, including a drag whose
-        # press, move, and release all happen between two ticks.
         if self.mode != "drag":
             self.reset_walk()
             if self.mode == "thinking":
-                # A direct gesture takes precedence over an in-flight request.
-                # Do not resume a stale thinking state after landing.
                 self._interrupt_thinking()
                 self.mode = "idle"
                 self.pet.set_state("idle")
@@ -527,9 +404,6 @@ class BehaviorController(QObject):
         if self.onboarding_active:
             return
         self.idle_ticks = 0
-        # A normal press may last longer than one timer tick.  _tick then
-        # temporarily sets drag even when the pointer never actually moved;
-        # clicked means mouseReleaseEvent has classified it as a click.
         if self.mode == "drag" and self._fell:
             self.mode = self._pre_fall_mode
             if self.mode != "fall":
@@ -541,17 +415,16 @@ class BehaviorController(QObject):
             self._interrupt_thinking()
             self.reset_walk()
             self._set_fully_asleep(False)
-            self._set_pose("oneshot:idle", "wave", bridge="wake_bridge",
-                           start_frame=wake_frame)
+            self._set_pose("oneshot:idle", "wave", bridge="wake_bridge", start_frame=wake_frame)
         elif self.mode not in ("drag", "fall"):
-            self.run_action(self.click_actions.get("click", "wave"))
+            action = self.click_actions.get("click", self.click_actions.get("single_click", "wave"))
+            self._run_click_action(action)
 
     def _on_double_clicked(self):
         if not self.onboarding_active:
             self.idle_ticks = 0
-            self.run_action(self.click_actions.get("double_click", "sleep"))
-
-    # ---------- tick ----------
+            action = self.click_actions.get("double_click", "sleep")
+            self._run_click_action(action)
 
     def _finish_fall(self):
         self._fell = False
@@ -569,7 +442,6 @@ class BehaviorController(QObject):
 
     def _tick(self):
         now = time.monotonic()
-        # A suspended window or system resume must not teleport the pet.
         dt = max(0.0, min(now - self._last_tick_time, 0.05))
         self._last_tick_time = now
         pet = self.pet
@@ -605,14 +477,12 @@ class BehaviorController(QObject):
 
         if self.mode.startswith("transition:"):
             self.advance_transition()
-
         elif self.mode == "walk":
             if self.move_toward(self.target_x, dt):
                 if random.random() < 0.2:
                     self.play_one_shot("jump")
                 else:
                     self.idle(reset_count=False)
-
         elif self.mode == "idle" and now >= self.mode_until:
             self.idle_ticks += 1
             if self.idle_ticks >= 4 and random.random() < 0.45:
@@ -622,22 +492,17 @@ class BehaviorController(QObject):
             elif random.random() < 0.18:
                 self.play_one_shot("jump")
             else:
-                gestures = [state for state in ("stretch", "bow")
-                            if self.can_play_extra_motion(state)]
+                gestures = [s for s in ("stretch", "bow") if self.can_play_extra_motion(s)]
                 if gestures and random.random() < 0.16:
                     self.play_extra_motion(random.choice(gestures))
                 else:
                     self.wander(reset_count=False)
-
         elif self.mode == "dance" and pet._completed_cycles >= self._dance_cycle_target:
             self.idle()
-
         elif self.mode == "sleep" and now >= self.mode_until:
             self.deep_sleep(nap=self._auto_nap)
-
         elif self.mode == "deepsleep" and self._auto_nap and now >= self.mode_until:
             self.wake()
-
         elif self.mode.startswith("oneshot:") and pet.one_shot_finished():
             nxt = self.mode.split(":", 1)[1]
             if nxt == "idle":

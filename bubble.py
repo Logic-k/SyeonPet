@@ -23,8 +23,7 @@ class SpeechBubble(QWidget):
 
         self.text = QLabel()
         self.text.setWordWrap(True)
-        self.text.setStyleSheet(
-            "QLabel { color: #2b2118; font-size: 13px; padding: 2px; }")
+        self.text.setStyleSheet("QLabel { color: #2b2118; font-size: 13px; padding: 2px; }")
 
         self.btn_prev = QPushButton("◀")
         self.btn_next = QPushButton("다음 ▶")
@@ -49,7 +48,7 @@ class SpeechBubble(QWidget):
         row.addWidget(self.btn_next)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setContentsMargins(12, 10, 12, 12)
         lay.addWidget(self.text)
         lay.addLayout(row)
         self.setFixedWidth(280)
@@ -58,8 +57,18 @@ class SpeechBubble(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -7)
+        cx = rect.center().x()
+        tri = QPainterPath()
+        tri.moveTo(cx - 7, rect.bottom())
+        tri.lineTo(cx, self.height() - 1)
+        tri.lineTo(cx + 7, rect.bottom())
+        tri.closeSubpath()
+
         path = QPainterPath()
-        path.addRoundedRect(self.rect().adjusted(1, 1, -1, -1), 12, 12)
+        path.addRoundedRect(rect, 12, 12)
+        path = path.united(tri).simplified()
+
         p.fillPath(path, QColor(255, 252, 246, 245))
         p.setPen(QPen(QColor(90, 70, 55), 2))
         p.drawPath(path)
@@ -94,5 +103,4 @@ class SpeechBubble(QWidget):
             self.hide()
 
     def anchor_to(self, pet_widget):
-        """Re-parent is done at construction; just trigger window relayout."""
         pet_widget._relayout()

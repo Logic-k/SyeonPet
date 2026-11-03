@@ -26,6 +26,39 @@ APP_FILES = (
     "version.py", "update_checker.py", "update_trust.py", "updater_core.py",
     "updater_switch.py", "updater_ui.py", "wardrobe.py", "wardrobe_packs.py",
     "wardrobe_presets.py",
+    "syeonpet/__init__.py",
+    "syeonpet/paths.py",
+    "syeonpet/ai/__init__.py",
+    "syeonpet/ai/oauth_transport.py",
+    "syeonpet/chat/__init__.py",
+    "syeonpet/chat/dialogs.py",
+    "syeonpet/chat/diff_view.py",
+    "syeonpet/chat/direct_work_ui.py",
+    "syeonpet/chat/error_sanitizer.py",
+    "syeonpet/chat/executor.py",
+    "syeonpet/chat/state_codec.py",
+    "syeonpet/chat/ui_builder.py",
+    "syeonpet/finder/__init__.py",
+    "syeonpet/finder/extractors.py",
+    "syeonpet/finder/finder_ui.py",
+    "syeonpet/finder/index_engine.py",
+    "syeonpet/finder/query_parser.py",
+    "syeonpet/pet/__init__.py",
+    "syeonpet/pet/behavior_bridges.py",
+    "syeonpet/pet/companion_care.py",
+    "syeonpet/pet/quick_bar.py",
+    "syeonpet/pet/sprite_bank.py",
+    "syeonpet/privacy/__init__.py",
+    "syeonpet/privacy/detector.py",
+    "syeonpet/ui/__init__.py",
+    "syeonpet/ui/pet_menu.py",
+    "syeonpet/ui/shortcut_helper.py",
+    "syeonpet/work/__init__.py",
+    "syeonpet/work/assistant_core.py",
+    "syeonpet/work/bag_ui.py",
+    "syeonpet/work/doc_export.py",
+    "syeonpet/work/tasks_memo.py",
+    "syeonpet/work/web_ai_bridge.py",
 )
 ROOT_RUNTIME = (
     "SyeonPet.exe", "pythonw.exe", "python3.dll", "python312.dll",
@@ -133,6 +166,7 @@ GUIDES = (
     "docs/CLOUD_AI_TEST_2026-10-31.md",
     "docs/유초등교육과_션_사용가이드.html",
     "docs/유초등교육과_션_사용가이드.pdf",
+    "docs/션_초보자_업무활용_가이드.html",
     "docs/SPRITE_WARDROBE.md",
     "docs/WARDROBE_CURATION.md",
     "docs/WARDROBE_MOTIONS_2026-10-31.md",
@@ -165,9 +199,17 @@ SHIBOKEN_RUNTIME = (
     "vccorlib140.dll", "vcomp140.dll", "vcruntime140.dll", "vcruntime140_1.dll",
 )
 LICENSES = ("PYTHON-3.12.7.txt", "LGPL-3.0-only.txt", "GPL-2.0-only.txt", "GPL-3.0-only.txt")
-README = """션 데스크톱 프롬프트 도우미 (Windows)
+README = """션 데스크톱 프롬프트 도우미 & 비서 (v0.2.0, Windows)
 
-SyeonPet.exe를 실행하세요. run.cmd는 동일한 소스를 실행하는 대체 방법입니다.
+SyeonPet.exe를 실행하세요. run.cmd 또는 바탕화면에_션_바로가기_만들기.cmd를 통해
+바탕화면에 바로가기를 만들거나 동일한 소스를 실행할 수 있습니다.
+v0.2.0에서는 4대 워크스페이스 허브가 제공됩니다:
+- ✨ 바로 도움받기: 초보자 맞춤형 원클릭 공문/안내문자/수식 완성
+- 🔍 내 파일 찾기: 초성 검색, 본문 검색 및 최신본 스마트 묶음
+- 🎒 할 일 · 메모: 체크 완료 시 션의 축하 세레머니
+- 🛠️ AI 질문 다듬기: 전문가용 프롬프트 최적화
+- 🛡️ 개인정보 가리기: 민감 정보 실시간 자동 마스킹
+
 설정 config.json은 새 배포물의 공개 기본값입니다. 기존 앱의 개인 설정을 자동으로
 덮어쓰거나 이전하지 않습니다. 보관함은 사용자 로컬 앱 데이터에 별도로 저장됩니다.
 외부 AI로 보내기 전에는 기관의 개인정보 지침과 허용 서비스를 확인하세요.
@@ -177,6 +219,9 @@ AI 설정에서 개인 연결을 추가할 수 있습니다. ChatGPT 구독 로�
 로컬 Ollama는 서로 다른 연결이며 사용 조건과 한도도 다릅니다.
 연결과 프롬프트 검토·비교 사용법은 docs/AI_PROFILES.md를 확인하세요.
 무료 클라우드 AI 시험 결과는 docs/CLOUD_AI_TEST_2026-10-31.md를 확인하세요.
+초보자 업무 활용법은 docs/션_초보자_업무활용_가이드.html을 참고하세요.
+유초등교육과 맞춤 사용법은 docs/유초등교육과_션_사용가이드.html 또는
+docs/유초등교육과_션_사용가이드.pdf에서 확인하세요.
 션을 우클릭하여 션이 옷장을 열고 장식이나 검증한 외형 팩을 선택할 수 있습니다.
 스프라이트 팩 형식은 docs/SPRITE_WARDROBE.md를 참고하세요.
 자세별 의상 제작 기록은 docs/WARDROBE_CURATION.md를 참고하세요.
@@ -185,9 +230,7 @@ AI 설정에서 개인 연결을 추가할 수 있습니다. ChatGPT 구독 로�
 고요 모드 (작업 계속)는 션의 자동 움직임을 멈추되 프롬프트 작업을 막지 않습니다.
 Windows의 애니메이션 효과를 끈 경우에도 자동으로 동작 줄이기를 적용합니다.
 차분 모드는 천천히 움직이며, 완전 수면은 새 보내기를 잠시 막는 별도 기능입니다.
-이전 v0.1.5 이하에서는 자동 업데이트를 사용할 수 없어 이 버전을 한 번 직접 설치해야 합니다.
-사용 방법은 docs/유초등교육과_션_사용가이드.html 또는
-docs/유초등교육과_션_사용가이드.pdf에서 확인하세요. 자세한 제3자 고지는 licenses를 보세요.
+자세한 제3자 고지는 licenses를 보세요.
 """
 
 
@@ -227,19 +270,31 @@ def _check_app_imports(sources: dict[str, str], local_modules: set[str]) -> None
         tree = ast.parse(source)
         for node in ast.walk(tree):
             names = []
+            full_modules = []
             if isinstance(node, ast.Import):
-                names = [item.name.split(".")[0] for item in node.names]
+                for item in node.names:
+                    names.append(item.name.split(".")[0])
+                    full_modules.append(item.name)
             elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module.split(".")[0]]
+                names.append(node.module.split(".")[0])
+                full_modules.append(node.module)
             for module in names:
                 local = module + ".py"
                 if local in local_modules and local not in allowed:
                     raise ValueError(f"배포 목록에 로컬 모듈을 추가해야 합니다: {name}: {local}")
+            for fmod in full_modules:
+                if fmod.startswith("syeonpet."):
+                    mod_path = fmod.replace(".", "/") + ".py"
+                    pkg_path = fmod.replace(".", "/") + "/__init__.py"
+                    if mod_path in local_modules and mod_path not in allowed:
+                        raise ValueError(f"배포 목록에 로컬 패키지 파일을 추가해야 합니다: {name}: {mod_path}")
+                    if pkg_path in local_modules and pkg_path not in allowed:
+                        raise ValueError(f"배포 목록에 로컬 패키지 파일을 추가해야 합니다: {name}: {pkg_path}")
 
 
 def collect_files(root: Path) -> dict[str, Path]:
     root = root.resolve()
-    result = {name: _file(root, name) for name in (*APP_FILES, *ROOT_RUNTIME, *ASSETS, *GUIDES, "run.cmd")}
+    result = {name: _file(root, name) for name in (*APP_FILES, *ROOT_RUNTIME, *ASSETS, *GUIDES, "run.cmd", "바탕화면에_션_바로가기_만들기.cmd")}
     result["config.json"] = _file(root, "tools/default-config.json")
     result["licenses/THIRD_PARTY.md"] = _file(root, "tools/THIRD_PARTY.md")
     for name in LICENSES:
@@ -326,13 +381,13 @@ def _committed_bytes(root: Path, blobs: dict[str, str]) -> dict[str, bytes]:
 
 
 def _revision_local_modules(root: Path, revision: str) -> set[str]:
-    """Inspect the same commit's top-level names, not the working tree."""
+    """Inspect the same commit's top-level names and syeonpet package modules."""
     try:
-        raw = subprocess.run(["git", "ls-tree", "--name-only", "-z", revision],
+        raw = subprocess.run(["git", "ls-tree", "-r", "--name-only", "-z", revision],
                              cwd=root, check=True, capture_output=True).stdout.decode("utf-8")
     except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
         raise ValueError("커밋의 로컬 모듈 목록을 읽지 못했습니다.") from exc
-    return {name for name in raw.split("\0") if name.endswith(".py") and "/" not in name}
+    return {name for name in raw.split("\0") if name.endswith(".py") and ("/" not in name or name.startswith("syeonpet/"))}
 
 
 def _builder_git_hash(root: Path) -> str:
@@ -371,7 +426,10 @@ def build(root: Path, output: Path, version: str, revision: str | None = None) -
         _check_app_imports(sources, _revision_local_modules(root, revision))
     else:
         sources = {name: _file(root, name).read_text(encoding="utf-8") for name in APP_FILES}
-        _check_app_imports(sources, {path.name for path in root.glob("*.py") if path.is_file()})
+        local_files = {path.name for path in root.glob("*.py") if path.is_file()}
+        if (root / "syeonpet").is_dir():
+            local_files |= {path.relative_to(root).as_posix() for path in (root / "syeonpet").glob("**/*.py") if path.is_file()}
+        _check_app_imports(sources, local_files)
     manifest = {"version": version, "source_commit": revision, "files": {}}
     created_zip = False
     created_checksum = False
