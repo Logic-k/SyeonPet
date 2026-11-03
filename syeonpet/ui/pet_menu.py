@@ -138,6 +138,7 @@ def build_settings_menu(
     toggle_speech: Callable[[bool], None],
     set_frame_blending: Callable[[bool], None],
     set_quiet_mode: Callable[[bool], None],
+    set_follow_windows_motion: Callable[[bool], None],
     double_click_choices: tuple[tuple[str, str], ...],
     autostart_enabled_fn: Callable[[], bool],
     set_autostart_fn: Callable[[bool], None],
@@ -186,6 +187,12 @@ def build_settings_menu(
     act_quiet.setChecked(preferences["reduced_motion"])
     act_quiet.triggered.connect(set_quiet_mode)
     actions["quiet"] = act_quiet
+
+    act_follow = settings_menu.addAction("Windows 동작 줄이기 따르기")
+    act_follow.setCheckable(True)
+    act_follow.setChecked(preferences["follow_windows_motion"])
+    act_follow.triggered.connect(set_follow_windows_motion)
+    actions["follow_windows"] = act_follow
 
     act_speech = settings_menu.addAction("말풍선 표시")
     act_speech.setCheckable(True)

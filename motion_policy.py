@@ -25,6 +25,11 @@ def read_windows_reduced_motion() -> bool | None:
     return not bool(enabled.value)
 
 
+def effective_reduced_motion(system_reduced: bool, follow_windows: bool, quiet: bool) -> bool:
+    """The app's quiet mode always applies; the Windows signal only while followed."""
+    return quiet or (follow_windows and system_reduced)
+
+
 class _MotionFilter(QAbstractNativeEventFilter):
     def __init__(self, owner: MotionPreference) -> None:
         super().__init__()

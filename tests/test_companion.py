@@ -181,15 +181,17 @@ class CompanionTests(unittest.TestCase):
                    "click_actions": {"double_click": "wave"}}
             self.assertEqual(main.load_pet_preferences(settings, cfg),
                              {"calm": True, "speech": False, "blend": True, "double_click": "wave",
-                              "reduced_motion": False})
+                              "reduced_motion": False, "follow_windows_motion": True})
             settings.setValue("double_click", "not-an-action")
             settings.setValue("calm", "invalid")
             settings.setValue("speech", "true")
             self.assertEqual(main.load_pet_preferences(settings, cfg),
                              {"calm": True, "speech": True, "blend": True, "double_click": "wave",
-                              "reduced_motion": False})
+                              "reduced_motion": False, "follow_windows_motion": True})
             cfg["click_actions"]["double_click"] = "invalid-config-action"
             self.assertEqual(main.load_pet_preferences(settings, cfg)["double_click"], "sleep")
+            settings.setValue("follow_windows_motion", "false")
+            self.assertFalse(main.load_pet_preferences(settings, cfg)["follow_windows_motion"])
 
     def test_launch_tour_starts_by_itself_only_on_first_run(self):
         # The tour holds the pet still until 다음/완료, so a tour on every
@@ -310,6 +312,13 @@ class CompanionTests(unittest.TestCase):
                     actions["고요 모드 (작업 계속)"].trigger()
                     self.assertFalse(actions["고요 모드 (작업 계속)"].isChecked())
                     self.assertTrue(pet.reduced_motion)
+                    follow = actions["Windows 동작 줄이기 따르기"]
+                    self.assertTrue(follow.isChecked())
+                    follow.trigger()
+                    self.assertFalse(pet.reduced_motion)
+                    self.assertTrue(actions["프레임 부드럽게 전환"].isEnabled())
+                    follow.trigger()
+                    self.assertTrue(pet.reduced_motion)
                     policy.query = lambda: False
                     policy.refresh()
                     self.assertFalse(pet.reduced_motion)
@@ -351,7 +360,7 @@ class CompanionTests(unittest.TestCase):
             settings = QSettings(path, QSettings.Format.IniFormat)
             self.assertEqual(main.load_pet_preferences(settings, cfg),
                              {"calm": True, "speech": False, "blend": True, "double_click": "jump",
-                              "reduced_motion": False})
+                              "reduced_motion": False, "follow_windows_motion": True})
 
 
 if __name__ == "__main__":

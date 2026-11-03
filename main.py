@@ -43,7 +43,7 @@ from behavior import BehaviorController
 from bubble import SpeechBubble
 from chat import ChatPanel
 from focus_timer import FocusTimer
-from motion_policy import MotionPreference
+from motion_policy import MotionPreference, effective_reduced_motion
 from onboarding import OnboardingTour
 from pet import ASSETS, PetWidget, SpriteBank
 from syeonpet.pet.companion_care import OfficeCareScheduler
@@ -94,6 +94,7 @@ def load_pet_preferences(settings, cfg):
         "blend": boolean("blend", float(cfg.get("frame_blend_ms", 0)) > 0),
         "double_click": double,
         "reduced_motion": boolean("reduced_motion", False),
+        "follow_windows_motion": boolean("follow_windows_motion", True),
     }
 
 
@@ -223,7 +224,8 @@ def main() -> int:
 
     sprites = SpriteBank(ASSETS)
     pet = PetWidget(sprites, display_size=int(cfg.get("display_size", 168)))
-    pet.set_reduced_motion(motion_preference.reduced or preferences["reduced_motion"])
+    pet.set_reduced_motion(effective_reduced_motion(
+        motion_preference.reduced, preferences["follow_windows_motion"], preferences["reduced_motion"]))
     pet.BLEND_MS = float(cfg.get("frame_blend_ms", 0))
     pet.crossfade = preferences["blend"]
     if pet.crossfade and pet.BLEND_MS <= 0:
@@ -373,11 +375,15 @@ def main() -> int:
         save_preference("reduced_motion", enabled)
         apply_motion_preference()
 
+    def set_follow_windows_motion(enabled):
+        save_preference("follow_windows_motion", enabled)
+        apply_motion_preference()
+
     settings_menu = menu.addMenu("⚙️ 화면 · 설정 · 바로가기")
     settings_actions = build_settings_menu(
         settings_menu, pet, behavior, tour, chat_panel, update_checker,
         preferences, save_preference, ambient_state, toggle_speech,
-        set_frame_blending, set_quiet_mode, DOUBLE_CLICK_CHOICES,
+        set_frame_blending, set_quiet_mode, set_follow_windows_motion, DOUBLE_CLICK_CHOICES,
         autostart_enabled, set_autostart)
 
     def quit_app():
@@ -409,11 +415,14 @@ def main() -> int:
     act_quit.triggered.connect(quit_app)
 
     def apply_motion_preference(_sys_val=None):
-        enabled = motion_preference.reduced or settings_actions["quiet"].isChecked()
+        from_windows = motion_preference.reduced and settings_actions["follow_windows"].isChecked()
+        enabled = effective_reduced_motion(
+            motion_preference.reduced, settings_actions["follow_windows"].isChecked(),
+            settings_actions["quiet"].isChecked())
         pet.set_reduced_motion(enabled)
         tour.refresh_motion_policy()
         wardrobe_window.set_reduced_motion(enabled)
-        motion_notice.setText("Windows 동작 줄이기 적용 중" if motion_preference.reduced else "고요 모드 · 프롬프트 작업은 계속할 수 있어요")
+        motion_notice.setText("Windows 동작 줄이기 적용 중" if from_windows else "고요 모드 · 프롬프트 작업은 계속할 수 있어요")
         motion_status.setText(motion_notice.text())
         motion_status.setVisible(enabled)
         for act in motion_actions.values():
