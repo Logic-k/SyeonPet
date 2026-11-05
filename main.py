@@ -358,8 +358,20 @@ def main() -> int:
         pet.set_timer_badge(format_badge_text(focus_timer.label, focus_timer.remaining_seconds) if active else "")
 
     focus_timer.changed.connect(on_timer_changed)
-    focus_timer.expired.connect(lambda label: show_companion_message(
-        behavior, bubble, ambient_state["on"], f"{label} 시간이 끝났어요. 잠깐 몸을 풀어요!"))
+    def on_focus_expired(label):
+        c = focus_timer.cycle
+        if c is not None and label == "집중":
+            behavior.play_one_shot("celebrate")
+            show_companion_message(behavior, bubble, ambient_state["on"],
+                                   f"{c['done']}라운드 집중 완료! 잠깐 쉬면서 몸을 풀어요 🎉")
+        elif c is not None:
+            show_companion_message(behavior, bubble, ambient_state["on"],
+                                   f"{label} 끝! 다시 집중을 시작해요 💪")
+        else:
+            show_companion_message(behavior, bubble, ambient_state["on"],
+                                   f"{label} 시간이 끝났어요. 잠깐 몸을 풀어요!")
+
+    focus_timer.expired.connect(on_focus_expired)
     quick_bar.toggle_timer.connect(lambda: focus_timer.cancel() if (focus_timer.label or focus_timer.completed_label) else focus_timer.start(25, "집중"))
     behavior.fully_asleep_changed.connect(lambda asleep: bubble.hide() if asleep else None)
 

@@ -11,6 +11,22 @@ from PySide6.QtWidgets import QMenu, QMessageBox
 from syeonpet.ui.shortcut_helper import create_desktop_shortcut
 
 
+def _timer_status_text(timer) -> str:
+    seconds = timer.remaining_seconds
+    if timer.label:
+        phase = timer.label
+        c = getattr(timer, "cycle", None)
+        if c:
+            if timer.label == "집중":
+                phase = f"집중 {c['done'] + 1}/{c['rounds']}라운드"
+            else:
+                phase = f"{timer.label} · {c['done']}/{c['rounds']}라운드 완료"
+        return f"{phase} · {seconds // 60:02d}:{seconds % 60:02d} 남음"
+    if timer.completed_label:
+        return f"{timer.completed_label} 완료 · 다음 타이머를 시작할 수 있어요"
+    return "실행 중인 타이머 없음"
+
+
 def add_focus_timer_menu(parent: QMenu, timer) -> QMenu:
     """Add standard focus/rest timer submenu to parent and return it."""
     timer_menu = parent.addMenu("집중 / 휴식 타이머")
@@ -18,17 +34,12 @@ def add_focus_timer_menu(parent: QMenu, timer) -> QMenu:
     status.setEnabled(False)
     timer_menu.addAction("25분 집중").triggered.connect(lambda: timer.start(25, "집중"))
     timer_menu.addAction("5분 휴식").triggered.connect(lambda: timer.start(5, "휴식"))
+    timer_menu.addAction("🍅 사이클 시작 (집중25 + 휴식5)").triggered.connect(lambda: timer.start_cycle())
     cancel = timer_menu.addAction("타이머 취소")
     cancel.triggered.connect(timer.cancel)
 
     def refresh():
-        seconds = timer.remaining_seconds
-        if timer.label:
-            status.setText(f"{timer.label} · {seconds // 60:02d}:{seconds % 60:02d} 남음")
-        elif timer.completed_label:
-            status.setText(f"{timer.completed_label} 완료 · 다음 타이머를 시작할 수 있어요")
-        else:
-            status.setText("실행 중인 타이머 없음")
+        status.setText(_timer_status_text(timer))
         cancel.setText("완료 기록 지우기" if timer.completed_label else "타이머 취소")
         cancel.setEnabled(bool(timer.label or timer.completed_label))
 
@@ -48,17 +59,12 @@ def build_timer_menu(timer_menu: QMenu, timer) -> tuple[QAction, QAction]:
         mode = "휴식" if mins == 5 else "집중"
         act.triggered.connect(lambda _=False, m=mins, lbl=mode: timer.start(m, lbl))
 
+    timer_menu.addAction("🍅 사이클 시작 (집중25 + 휴식5)").triggered.connect(lambda: timer.start_cycle())
     cancel = timer_menu.addAction("타이머 취소")
     cancel.triggered.connect(timer.cancel)
 
     def refresh():
-        seconds = timer.remaining_seconds
-        if timer.label:
-            status.setText(f"{timer.label} · {seconds // 60:02d}:{seconds % 60:02d} 남음")
-        elif timer.completed_label:
-            status.setText(f"{timer.completed_label} 완료 · 다음 타이머를 시작할 수 있어요")
-        else:
-            status.setText("실행 중인 타이머 없음")
+        status.setText(_timer_status_text(timer))
         cancel.setText("완료 기록 지우기" if timer.completed_label else "타이머 취소")
         cancel.setEnabled(bool(timer.label or timer.completed_label))
 

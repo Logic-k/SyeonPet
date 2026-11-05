@@ -95,7 +95,7 @@ class FocusTimerTests(unittest.TestCase):
     def test_shared_menu_starts_reports_cancels_and_expires(self):
         parent = QMenu()
         menu = add_focus_timer_menu(parent, self.timer)
-        status, focus, rest, cancel = menu.actions()
+        status, focus, rest, _cycle, cancel = menu.actions()
         self.assertFalse(cancel.isEnabled())
         self.assertFalse(status.isEnabled())
         focus.trigger()
@@ -120,7 +120,7 @@ class FocusTimerTests(unittest.TestCase):
     def test_expired_completion_remains_in_menu_until_cleared(self):
         parent = QMenu()
         menu = add_focus_timer_menu(parent, self.timer)
-        status, _focus, _rest, clear = menu.actions()
+        status, _focus, _rest, _cycle, clear = menu.actions()
         empty_status = status.text()
         self.timer.start(5, "QA_REST")
         cancel_text = clear.text()
@@ -153,6 +153,78 @@ class FocusTimerTests(unittest.TestCase):
         self.assertEqual(self.timer.label, "QA_FOCUS")
         self.assertEqual(self.timer.remaining_seconds, 1500)
         self.assertTrue(self.timer._timer.isActive())
+
+    def test_cycle_alternates_focus_and_rest_automatically(self):
+        self.timer.start_cycle(focus_minutes=25, rest_minutes=5, long_rest_minutes=15, rounds=4)
+        self.assertEqual((self.timer.label, self.timer.remaining_seconds), ("집중", 1500))
+        self.assertIsNotNone(self.timer.cycle)
+        self.now += 1500
+        self.timer.check()
+        self.assertEqual(self.expired, ["집중"])
+        self.assertEqual((self.timer.label, self.timer.remaining_seconds), ("휴식", 300))
+        self.assertEqual(self.timer.cycle["done"], 1)
+        self.now += 300
+        self.timer.check()
+        self.assertEqual(self.expired, ["집중", "휴식"])
+        self.assertEqual((self.timer.label, self.timer.remaining_seconds), ("집중", 1500))
+        self.assertEqual(self.timer.cycle["done"], 1)
+
+    def test_cycle_takes_long_rest_every_n_rounds(self):
+        self.timer.start_cycle(25, 5, 15, rounds=2)
+        # Round 1: focus -> short rest -> back to focus.
+        self.now += 1500
+        self.timer.check()
+        self.assertEqual(self.timer.label, "휴식")
+        self.now += 300
+        self.timer.check()
+        self.assertEqual(self.timer.label, "집중")
+        # Round 2 focus expiry hits the rounds threshold -> long rest.
+        self.now += 1500
+        self.timer.check()
+        self.assertEqual(self.timer.cycle["done"], 2)
+        self.assertEqual((self.timer.label, self.timer.remaining_seconds), ("긴 휴식", 900))
+        self.now += 900
+        self.timer.check()
+        self.assertEqual(self.timer.label, "집중")
+
+    def test_cycle_stops_on_cancel_and_manual_start(self):
+        self.timer.start_cycle()
+        self.timer.cancel()
+        self.assertIsNone(self.timer.cycle)
+        self.now += 9999
+        self.timer.check()
+        self.assertEqual(self.expired, [])
+        self.timer.start_cycle()
+        self.timer.start(10, "집중")
+        self.assertIsNone(self.timer.cycle)
+        self.now += 9999
+        self.timer.check()
+        self.assertEqual(self.expired, ["집중"])
+        self.assertEqual(self.timer.label, "")
+
+    def test_cycle_rejects_bad_durations(self):
+        for args in ((0, 5, 15, 4), (25, -1, 15, 4), (25, 5, float("nan"), 4)):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                self.timer.start_cycle(*args)
+        self.assertIsNone(self.timer.cycle)
+        self.assertEqual(self.timer.remaining_seconds, 0)
+
+    def test_cycle_action_in_menu_starts_cycle_and_shows_round(self):
+        parent = QMenu()
+        menu = add_focus_timer_menu(parent, self.timer)
+        status, _focus, _rest, cycle_act, cancel = menu.actions()
+        self.assertIn("사이클", cycle_act.text())
+        cycle_act.trigger()
+        self.assertEqual(self.timer.label, "집중")
+        self.assertIsNotNone(self.timer.cycle)
+        self.assertIn("1/4", status.text())
+        self.now += 1500
+        self.timer.check()
+        self.assertIn("1/4", status.text())
+        self.assertIn("휴식", status.text())
+        cancel.trigger()
+        self.assertIsNone(self.timer.cycle)
+        parent.close()
 
     def test_refresh_disconnects_when_menu_is_destroyed(self):
         parent = QMenu()

@@ -149,6 +149,7 @@ class ChatPanel(QWidget):
         # Page 2: Bag Workspace
         self.bag_widget = BagWorkspaceWidget(parent=self)
         self.bag_widget.task_completed.connect(self._on_bag_task_completed)
+        self.bag_widget.timer_finished.connect(self.companion_praise)
         self.section_stack.addWidget(self.bag_widget)
 
         # Page 3: Prompt Conversation

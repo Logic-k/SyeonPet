@@ -194,6 +194,8 @@ def format_badge_text(label: str, remaining_seconds: int) -> str:
         return f"🍅 {mins:02d}:{secs:02d}"
     if lbl in ("휴식", "rest"):
         return f"☕ {mins:02d}:{secs:02d}"
+    if lbl in ("긴 휴식", "long rest"):
+        return f"🛋️ {mins:02d}:{secs:02d}"
     return f"⏱️ {mins:02d}:{secs:02d}"
 
 
