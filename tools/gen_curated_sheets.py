@@ -57,7 +57,7 @@ def build_sheet(choice: str, kind: str, entries: dict[str, list],
             frame = atlas.copy(rect["x"], rect["y"], rect["w"], rect["h"])
             sha = frame_sha(frame)
             entry = entries.get(sha)
-            if entry is None or entry[0] != kind:
+            if entry is None or entry[0] != kind or sha in placed:
                 continue
             dressed = decorate(frame, choice)
             painter.drawPixmap(entry[1], entry[2], dressed)
