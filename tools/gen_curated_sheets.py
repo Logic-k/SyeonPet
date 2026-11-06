@@ -1,7 +1,7 @@
 """Bake curated-v2 outfit sheets for new wardrobe presets.
 
-For each new choice and each kind (main/thinking/stretch/bow/sleep_bridge/
-turn_bridge), renders the dynamic-decorated version of every original frame
+For each new choice and each kind (main/thinking/stretch/bow/nuzzle/
+sleep_bridge/turn_bridge), renders the dynamic-decorated version of every original frame
 listed in curated-v2/lookup.json and packs it at the lookup's (x, y) slot.
 Run with the embedded runtime: pythonw tools/gen_curated_sheets.py <choice...>
 """
@@ -29,6 +29,7 @@ KIND_SOURCES = {
     "thinking": (ASSETS / "thinking" / "sprite-sheet-alpha.png", ASSETS / "thinking" / "manifest.json"),
     "stretch": (ASSETS / "extra_motions" / "stretch" / "sprite-sheet-alpha.png", ASSETS / "extra_motions" / "stretch" / "manifest.json"),
     "bow": (ASSETS / "extra_motions" / "bow" / "sprite-sheet-alpha.png", ASSETS / "extra_motions" / "bow" / "manifest.json"),
+    "nuzzle": (ASSETS / "extra_motions" / "nuzzle" / "sprite-sheet-alpha.png", ASSETS / "extra_motions" / "nuzzle" / "manifest.json"),
     "sleep_bridge": (ASSETS / "motion_bridges" / "sleep_bridge" / "sprite-sheet-alpha.png", ASSETS / "motion_bridges" / "sleep_bridge" / "manifest.json"),
     "turn_bridge": (ASSETS / "motion_bridges" / "turn_bridge" / "sprite-sheet-alpha.png", ASSETS / "motion_bridges" / "turn_bridge" / "manifest.json"),
 }

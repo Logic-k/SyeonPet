@@ -39,7 +39,7 @@ class SpriteBank:
                 "loop": bool(meta.get("loop", True)),
             }
         self._load_optional_thinking(self.assets_dir)
-        for state in ("stretch", "bow"):
+        for state in ("stretch", "bow", "nuzzle"):
             self._load_optional_row(self.assets_dir / "extra_motions" / state, state, loop=False)
         self._load_motion_bridges(self.assets_dir)
         if self.assets_dir.resolve() == ASSETS.resolve():

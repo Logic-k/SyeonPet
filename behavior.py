@@ -61,6 +61,8 @@ class BehaviorController(QObject):
         self.pet.clicked.connect(self._on_clicked)
         self.pet.double_clicked.connect(self._on_double_clicked)
         self.pet.drag_started.connect(self._on_drag_started)
+        self.pet.petted.connect(self._on_petted)
+        self.pet.petting_hand_allowed = lambda: not self.onboarding_active
 
         self.timer = QTimer(self)
         self.timer.setInterval(16)
@@ -356,10 +358,21 @@ class BehaviorController(QObject):
         self.pet.set_state(state)
 
     def can_play_extra_motion(self, state: str) -> bool:
-        return (state in ("stretch", "bow") and self.pet.sprites.has(state)
+        return (state in ("stretch", "bow", "nuzzle") and self.pet.sprites.has(state)
                 and not self.pet.reduced_motion and not self.sleeping
                 and not self.onboarding_active and not self.pet._dragging
                 and not self._fell and self.mode not in ("thinking", "drag", "fall"))
+
+    def _on_petted(self, _line: str = "") -> None:
+        """Lean into the stroking hand with a smile.
+
+        Like the other automatic gestures it starts only from standing or
+        walking, so a stroke never cuts a click's wave, a dance or a
+        celebration; the extra-motion rules also keep it from waking Syeon or
+        interrupting a drag, the tour or AI work.
+        """
+        if self.mode in ("idle", "walk"):
+            self.play_extra_motion("nuzzle")
 
     def play_extra_motion(self, state: str) -> bool:
         if not self.can_play_extra_motion(state):

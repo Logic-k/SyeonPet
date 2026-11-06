@@ -12,7 +12,7 @@ from tools.build_release import ASSETS
 class ExtraMotionAssetTests(unittest.TestCase):
     def test_each_motion_is_packaged_nonempty_transparent_and_played_once(self):
         root = Path(__file__).resolve().parents[1]
-        for state in ("stretch", "bow"):
+        for state in ("stretch", "bow", "nuzzle"):
             with self.subTest(state=state):
                 relative = f"assets/extra_motions/{state}"
                 for name in ("manifest.json", "sprite-sheet-alpha.png"):

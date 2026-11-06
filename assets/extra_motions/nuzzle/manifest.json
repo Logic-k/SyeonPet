@@ -1,0 +1,83 @@
+{
+  "characterId": "syeon",
+  "source": {
+    "sheet": "assets/sprite-sheet-alpha.png",
+    "row": "idle",
+    "frame": 2
+  },
+  "method": "whole-pixel row shear about the feet line (no resampling)",
+  "lean_degrees": [
+    1.5,
+    3.0,
+    1.0,
+    -1.5,
+    -3.0,
+    -1.0
+  ],
+  "animation": {
+    "cellWidth": 256,
+    "cellHeight": 256,
+    "columns": 6,
+    "rows": {
+      "nuzzle": {
+        "row": 0,
+        "frames": 6,
+        "durations_ms": [
+          170,
+          170,
+          170,
+          170,
+          170,
+          170
+        ],
+        "loop": false
+      }
+    }
+  },
+  "frame_layout": {
+    "sheetWidth": 1536,
+    "sheetHeight": 256,
+    "cellWidth": 256,
+    "cellHeight": 256,
+    "rows": {
+      "nuzzle": [
+        {
+          "x": 0,
+          "y": 0,
+          "w": 256,
+          "h": 256
+        },
+        {
+          "x": 256,
+          "y": 0,
+          "w": 256,
+          "h": 256
+        },
+        {
+          "x": 512,
+          "y": 0,
+          "w": 256,
+          "h": 256
+        },
+        {
+          "x": 768,
+          "y": 0,
+          "w": 256,
+          "h": 256
+        },
+        {
+          "x": 1024,
+          "y": 0,
+          "w": 256,
+          "h": 256
+        },
+        {
+          "x": 1280,
+          "y": 0,
+          "w": 256,
+          "h": 256
+        }
+      ]
+    }
+  }
+}

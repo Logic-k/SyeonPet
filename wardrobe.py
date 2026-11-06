@@ -29,7 +29,7 @@ _MOTION_NAMES = {
     "sleep": "앉아서 자기", "drag": "끌려가기", "celebrate": "기뻐하기",
     "jump": "점프하기", "dance": "춤추기", "liesleep": "누워 자기",
     "still": "엎드려 자기", "thinking": "고민하기",
-    "stretch": "기지개", "bow": "꾸벅 인사",
+    "stretch": "기지개", "bow": "꾸벅 인사", "nuzzle": "쓰다듬 받기",
     "sleep_bridge": "연결 · 눕기", "wake_bridge": "연결 · 일어나기",
     "turn_bridge": "연결 · 옆으로 돌기", "turn_front": "연결 · 정면으로 돌기",
 }

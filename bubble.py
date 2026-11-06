@@ -20,6 +20,9 @@ class SpeechBubble(QWidget):
         super().__init__(parent)
         self._generation = 0
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Keep a normal pointer over the bubble and its buttons; otherwise it
+        # would inherit the pet's petting hand.
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
         self.text = QLabel()
         self.text.setWordWrap(True)

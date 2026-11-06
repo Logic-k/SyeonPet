@@ -15,7 +15,7 @@ from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QMouseEvent, QPainter, QPixmap, QRegion, QTransform
 from PySide6.QtWidgets import QWidget
 
-from syeonpet.pet.companion_care import HeartParticle, PettingTracker, paint_hearts
+from syeonpet.pet.companion_care import HEAD_ZONE_RATIO, HeartParticle, PettingTracker, paint_hearts
 from syeonpet.pet.quick_bar import TimerBadge, paint_timer_badge
 from syeonpet.pet.sprite_bank import (ASSETS, SpriteBank, blend_pixmaps,
                                       compute_mask_region, compute_proc_fx,
@@ -81,6 +81,10 @@ class PetWidget(QWidget):
         # Petting (머리 쓰다듬기) & heart_particle system
         self.petting_tracker = PettingTracker()
         self.heart_particles: list[HeartParticle] = []
+        # An open hand over the head invites stroking; the behaviour controller
+        # turns it off while the onboarding tour owns the pet.
+        self.petting_hand_allowed = lambda: True
+        self._petting_hand = False
         self.setMouseTracking(True)
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
@@ -257,10 +261,13 @@ class PetWidget(QWidget):
         if self.bubble_widget is not None and self.bubble_widget.isVisible():
             region |= QRegion(self.bubble_widget.geometry())
         if self.timer_badge_text:
-            bx = x + (scaled.width() - 88) // 2
-            by = max(2, y - 26)
-            region |= QRegion(QRect(bx, by, 88, 22))
+            region |= QRegion(self._badge_rect(x, y, scaled.width()))
         self.setMask(region)
+
+    @staticmethod
+    def _badge_rect(x: int, y: int, width: int) -> QRect:
+        """Focus-timer badge above a sprite drawn at (x, y) with this width."""
+        return QRect(x + (width - 88) // 2, max(2, y - 26), 88, 22)
 
     def _relayout(self):
         floor = self.y() + self.height()
@@ -280,6 +287,7 @@ class PetWidget(QWidget):
         self.reduced_motion = enabled
         self._last_tick = time.monotonic()
         if enabled:
+            self._set_petting_hand(False)
             self.tick.stop()
             self.frame_idx = 0
             self._frame_elapsed = 0.0
@@ -429,7 +437,21 @@ class PetWidget(QWidget):
     def physics_step(self, dt: float) -> bool:
         return integrate_physics_step(self, dt)
 
+    def _set_petting_hand(self, shown: bool) -> None:
+        if shown == self._petting_hand:
+            return
+        self._petting_hand = shown
+        if shown:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.unsetCursor()
+
+    def leaveEvent(self, e):
+        self._set_petting_hand(False)
+        super().leaveEvent(e)
+
     def mousePressEvent(self, e: QMouseEvent):
+        self._set_petting_hand(False)
         if e.button() == Qt.MouseButton.LeftButton:
             self._physics_position = None
             self._physics_anchor = None
@@ -455,7 +477,13 @@ class PetWidget(QWidget):
             pos = e.position()
             px, py = pos.x(), pos.y()
             rx, ry, rw, rh = self._sprite_draw_rect()
-            if rx <= px <= rx + rw and ry <= py <= ry + rh:
+            # The focus-timer badge sits inside the sprite box above the leaf;
+            # it is not Syeon's head, so it neither shows the hand nor counts.
+            inside = (rx <= px <= rx + rw and ry <= py <= ry + rh
+                      and not (self.timer_badge_text and self._badge_rect(rx, ry, rw).contains(int(px), int(py))))
+            self._set_petting_hand(inside and py - ry < rh * HEAD_ZONE_RATIO
+                                   and self.petting_hand_allowed())
+            if inside:
                 triggered, line = self.petting_tracker.feed_point(px, py - ry, rh)
                 if triggered:
                     for pt in self.petting_tracker.particles[-7:]:
@@ -463,6 +491,8 @@ class PetWidget(QWidget):
                     self.heart_particles = self.petting_tracker.particles
                     self.petted.emit(line or "")
                     self.update()
+        else:
+            self._set_petting_hand(False)
 
     def mouseReleaseEvent(self, e: QMouseEvent):
         if e.button() != Qt.MouseButton.LeftButton or not self._dragging:
@@ -526,7 +556,7 @@ class PetWidget(QWidget):
             paint_hearts(p, self.heart_particles)
         if self.timer_badge_text:
             rx, ry, rw, rh = self._sprite_draw_rect()
-            TimerBadge.paint(p, QRect(rx + (rw - 88) // 2, max(2, ry - 26), 88, 22), self.timer_badge_text)
+            TimerBadge.paint(p, self._badge_rect(rx, ry, rw), self.timer_badge_text)
         p.end()
 
     def showEvent(self, e):
@@ -536,6 +566,8 @@ class PetWidget(QWidget):
     def set_click_through(self, enabled: bool):
         """Toggle whole-window input passing with safety escape monitoring."""
         self._click_through = bool(enabled)
+        if self._click_through:
+            self._set_petting_hand(False)
         if sys.platform == "win32":
             import ctypes
             hwnd = int(self.winId())

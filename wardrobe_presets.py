@@ -62,7 +62,7 @@ def _curated_frame(frame, choice):
         return None
     entry = _CURATED_LOOKUP.get(hashlib.sha256(bytes(image.constBits())).hexdigest())
     if (not isinstance(entry, list) or len(entry) != 5
-            or entry[0] not in ("main", "thinking", "stretch", "bow",
+            or entry[0] not in ("main", "thinking", "stretch", "bow", "nuzzle",
                                 "sleep_bridge", "turn_bridge")
             or any(type(v) is not int for v in entry[1:])
             or entry[1] < 0 or entry[2] < 0 or entry[3:] != [256, 256]):

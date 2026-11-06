@@ -14,6 +14,10 @@ from typing import Sequence
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter
 
+# Strokes count, and the petting hand cursor shows, in the top part of the
+# sprite: the leaf and face down to the cheeks.
+HEAD_ZONE_RATIO = 0.55
+
 PETTING_LINES: tuple[str, ...] = (
     "헤헤, 머리 쓰담쓰담 정말 좋아요! 💕",
     "응원 에너지 100% 충전 완료! 오늘도 화이팅이에요 🌱",
@@ -112,7 +116,7 @@ class PettingTracker:
         """
         current = time.monotonic() if now is None else float(now)
         # Check head/leaf bounding zone
-        if y >= sprite_h * 0.55:
+        if y >= sprite_h * HEAD_ZONE_RATIO:
             return False, None
 
         self._history.append((current, x, y))

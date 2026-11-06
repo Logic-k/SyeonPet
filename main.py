@@ -106,6 +106,8 @@ def show_companion_message(behavior, bubble, speech_enabled, text):
         return False
     if behavior.sleeping:
         behavior.wake()
+    elif behavior.pet.state == "nuzzle":
+        behavior.idle(reset_count=False)  # a petting nuzzle never holds back an alert
     elif behavior.mode not in ("idle", "walk", "thinking"):
         return False
     saved = behavior._thinking_restore

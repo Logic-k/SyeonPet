@@ -84,6 +84,113 @@ class HubAndPetV020Tests(unittest.TestCase):
         paint_hearts(painter, self.pet.heart_particles)
         painter.end()
 
+    def _hover(self, dy_ratio: float):
+        rx, ry, rw, rh = self.pet._sprite_draw_rect()
+        pos = QPointF(rx + rw / 2, ry + rh * dy_ratio)
+        self.pet.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, pos, Qt.MouseButton.NoButton,
+                                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+
+    def _hand_shown(self) -> bool:
+        return (self.pet.testAttribute(Qt.WidgetAttribute.WA_SetCursor)
+                and self.pet.cursor().shape() == Qt.CursorShape.OpenHandCursor)
+
+    def test_open_hand_shows_only_over_the_head_and_clears(self):
+        self._hover(0.2)
+        self.assertTrue(self._hand_shown())
+        self._hover(0.8)  # body and feet: not a petting spot
+        self.assertFalse(self._hand_shown())
+        self._hover(0.2)
+        self.pet.leaveEvent(QEvent(QEvent.Type.Leave))
+        self.assertFalse(self._hand_shown())
+        self._hover(0.2)
+        rx, ry, rw, rh = self.pet._sprite_draw_rect()
+        press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(rx + rw / 2, ry + 10), QPointF(rx + rw / 2, ry + 10),
+                            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        self.pet.mousePressEvent(press)
+        self.assertFalse(self._hand_shown())
+        self.pet._dragging = False
+        self._hover(0.2)
+        self.pet.set_reduced_motion(True)
+        self.assertFalse(self._hand_shown())
+        self._hover(0.2)
+        self.assertFalse(self._hand_shown())
+        self.pet.set_reduced_motion(False)
+        self.behavior.onboarding_active = True
+        self._hover(0.2)
+        self.assertFalse(self._hand_shown())
+        self.behavior.onboarding_active = False
+        self._hover(0.2)
+        self.assertTrue(self._hand_shown())
+        # The bubble keeps a normal pointer instead of inheriting the hand.
+        self.assertEqual(self.bubble.cursor().shape(), Qt.CursorShape.ArrowCursor)
+        self.assertTrue(self.bubble.testAttribute(Qt.WidgetAttribute.WA_SetCursor))
+
+    def test_petting_plays_the_smiling_nuzzle_once_without_waking_or_interrupting(self):
+        self.assertTrue(self.sprites.has("nuzzle"))
+        self.behavior.idle()
+        self.pet.petted.emit("")
+        self.assertEqual(self.pet.state, "nuzzle")
+        self.assertEqual(self.behavior.mode, "oneshot:idle")
+        self.pet.frame_idx = 3
+        self.pet.petted.emit("")  # still nuzzling: no restart
+        self.assertEqual((self.pet.state, self.pet.frame_idx), ("nuzzle", 3))
+        for _ in range(20):
+            self.pet._advance_frame(400)
+        self.assertTrue(self.pet.one_shot_finished())
+        self.behavior._tick()
+        self.assertEqual(self.pet.state, "idle")
+        self.behavior.sleep()
+        self.pet.petted.emit("")
+        self.assertNotEqual(self.pet.state, "nuzzle")
+        self.behavior.wake()
+        self.behavior.idle()
+        self.behavior.onboarding_active = True
+        self.pet.petted.emit("")
+        self.assertNotEqual(self.pet.state, "nuzzle")
+        self.behavior.onboarding_active = False
+        self.pet.set_reduced_motion(True)
+        self.pet.petted.emit("")
+        self.assertNotEqual(self.pet.state, "nuzzle")
+        self.pet.set_reduced_motion(False)
+
+    def test_a_stroke_never_cuts_a_click_wave_or_a_dance(self):
+        self.behavior.idle()
+        self.behavior.play_one_shot("wave")
+        self.pet.petted.emit("")
+        self.assertEqual(self.pet.state, "wave")
+        self.behavior.dance(2.0)
+        self.pet.petted.emit("")
+        self.assertEqual(self.pet.state, "dance")
+
+    def test_an_alert_ends_the_nuzzle_instead_of_being_dropped(self):
+        from main import show_companion_message
+        self.behavior.idle()
+        self.pet.petted.emit("")
+        self.assertEqual(self.pet.state, "nuzzle")
+        self.assertTrue(show_companion_message(self.behavior, self.bubble, True, "휴식 끝!"))
+        self.assertEqual((self.pet.state, self.behavior.mode), ("idle", "idle"))
+
+    def test_the_timer_badge_is_not_part_of_the_head(self):
+        self.pet.set_timer_badge("🍅 24:50")
+        rx, ry, rw, _rh = self.pet._sprite_draw_rect()
+        badge = self.pet._badge_rect(rx, ry, rw)
+        self.pet.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, QPointF(badge.center()), Qt.MouseButton.NoButton,
+                                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+        self.assertFalse(self._hand_shown())
+        self.pet.set_timer_badge("")
+        self._hover(0.2)
+        self.assertTrue(self._hand_shown())
+
+    def test_stroking_the_head_makes_syeon_nuzzle(self):
+        self.behavior.idle()
+        rx, ry, rw, rh = self.pet._sprite_draw_rect()
+        for offset_x in (10, 60, 15, 65):
+            self.pet.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, QPointF(rx + offset_x, ry + 15),
+                                                Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                                                Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(self.pet.state, "nuzzle")
+        self.assertTrue(self._hand_shown())
+
     # 2. Timer Badge Formatting and Rendering
     def test_format_badge_text_and_pet_badge_paint(self):
         focus_formatted = format_badge_text("집중", 1495)

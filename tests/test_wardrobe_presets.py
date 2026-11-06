@@ -107,7 +107,7 @@ class WardrobePresetTests(unittest.TestCase):
         self.assertEqual(rgba(original), before)
 
     def test_extra_motion_frames_have_pose_fitted_outfits(self):
-        for state in ("stretch", "bow"):
+        for state in ("stretch", "bow", "nuzzle"):
             frames = self.bank.states[state]["frames"]
             self.assertEqual(len(frames), 6)
             for index, frame in enumerate(frames):
