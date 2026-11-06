@@ -182,6 +182,14 @@ class AiOptimizerTests(unittest.TestCase):
         self.assertIn("확정된 역할이 context에 있으면 결과의 첫 문장부터 그 역할대로 주어를 씁니다.", ai.SYSTEM)
         self.assertIn("본문 첫 문장에서 뒤집지 마세요.", ai.SYSTEM)
 
+    def test_prompt_length_and_material_slot_are_not_imposed_on_the_deliverable(self):
+        # A/B on 2026-11-06: free models copied the prompt's own line count and the
+        # example's "인사 1줄, 안내 3~4줄" into deliverables as unrequested limits.
+        self.assertIn("이 줄 수는 다른 AI가 만들 결과물의 분량이 아니므로", ai.SYSTEM)
+        self.assertNotIn("인사 1줄, 안내 3~4줄", ai.SYSTEM)
+        self.assertIn("자료 없이 만들 수 있는 작업에는 \"자료:\" 줄을 붙이지 마세요.", ai.SYSTEM)
+        self.assertIn("'문의자: … / 답변 작성자: … / 수신자: …' 줄을 두고", ai.SYSTEM)
+
     def test_role_guidance_does_not_modify_source_context_or_revision(self):
         prompt = "학교가 교육청에 문의한 내용을 정리하고 답변 초안을 요청해 줘."
         context = "교육청 담당자가 학교에 회신합니다."
