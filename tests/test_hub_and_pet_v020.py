@@ -170,6 +170,23 @@ class HubAndPetV020Tests(unittest.TestCase):
         self.assertTrue(show_companion_message(self.behavior, self.bubble, True, "휴식 끝!"))
         self.assertEqual((self.pet.state, self.behavior.mode), ("idle", "idle"))
 
+    def test_petting_line_never_replaces_the_tour_bubble(self):
+        from main import show_petting_line
+        tour = OnboardingTour(self.pet, self.behavior, self.bubble,
+                              [{"text": "QA_STEP", "action": "wave"}, {"text": "QA_NEXT"}])
+        tour.start()
+        self.assertTrue(tour.active)
+        self.bubble.show_step("QA_STEP", 0, 2, True)
+        show_petting_line(self.bubble, True, tour.active, "QA_PET_LINE")
+        self.assertEqual(self.bubble.text.text(), "QA_STEP")
+        self.assertTrue(tour.active)
+        tour.finish()
+        self.assertFalse(tour.active)
+        show_petting_line(self.bubble, True, tour.active, "QA_PET_LINE")
+        self.assertEqual(self.bubble.text.text(), "QA_PET_LINE")
+        show_petting_line(self.bubble, False, False, "QA_MUTED")
+        self.assertEqual(self.bubble.text.text(), "QA_PET_LINE")
+
     def test_the_timer_badge_is_not_part_of_the_head(self):
         self.pet.set_timer_badge("🍅 24:50")
         rx, ry, rw, _rh = self.pet._sprite_draw_rect()

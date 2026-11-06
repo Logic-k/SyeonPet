@@ -99,6 +99,16 @@ def load_pet_preferences(settings, cfg):
     }
 
 
+def show_petting_line(bubble, speech_enabled, tour_active, line):
+    """A petting reply never replaces the onboarding tour's step bubble.
+
+    That bubble holds the tour's Next/Skip buttons; replacing it left the tour
+    active with no way forward.
+    """
+    if speech_enabled and not tour_active:
+        bubble.show_temporary(line, 3500)
+
+
 def show_companion_message(behavior, bubble, speech_enabled, text):
     """A bubble only: wake ordinary sleep for important alerts, never disturb full sleep."""
     if (not speech_enabled or behavior.fully_asleep or behavior.onboarding_active
@@ -349,7 +359,7 @@ def main() -> int:
     if hasattr(chat_panel.work_widget, "task_feedback"):
         chat_panel.work_widget.task_feedback.connect(
             lambda outcome: task_feedback(behavior, bubble, ambient_state["on"], outcome))
-    pet.petted.connect(lambda line: bubble.show_temporary(line, 3500) if ambient_state["on"] else None)
+    pet.petted.connect(lambda line: show_petting_line(bubble, ambient_state["on"], tour.active, line))
     chat_panel.companion_praise.connect(lambda msg: (behavior.play_one_shot("celebrate"), bubble.show_temporary(msg, 3500) if ambient_state["on"] else None))
     behavior.hub_requested.connect(lambda: chat_panel.show_section_near_pet("work"))
 
