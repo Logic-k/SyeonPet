@@ -38,6 +38,15 @@ _ROLE_HEADING = "확정된 문의·답변 역할 (사용자 확인):"
 _JARVIS_NOTICE = ("JarvisClaw는 외부 모델 제공자에게 요청을 전달할 수 있고 일부 이용 메타데이터를 "
                   "처리할 수 있습니다. 개인정보와 비공개 자료를 보내지 마세요. "
                   "기관 사용 승인을 확인해 주세요. 개인정보 처리방침: https://api.jarvisclaw.ai/privacy-policy")
+# Wording follows each operator's own page (checked 2026-11-06).
+_KILO_NOTICE = ("Kilo 무료 모델(kilo-auto/free)은 프롬프트와 응답을 기록해 서비스 개선에 쓰는 제공자에게 "
+                "요청을 보낼 수 있습니다. 개인정보와 비공개 자료를 보내지 마세요. 기관 사용 승인을 확인해 주세요. "
+                "안내: https://kilo.ai/docs/gateway/models-and-providers")
+_OVH_NOTICE = ("OVHcloud AI Endpoints는 유럽에서 운영되며, 공식 문서는 입력을 저장하거나 공유하지 않는다고 설명합니다. "
+               "키 없는 익명 사용은 같은 인터넷 연결에서 분당 2회로 제한되고, 서비스 약정이 없어 한도나 제공 여부가 "
+               "바뀔 수 있습니다. 개인정보와 비공개 자료를 보내지 말고 기관 사용 승인을 확인해 주세요. "
+               "안내: https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-capabilities")
+PROVIDER_NOTICES = {"jarvisclaw": _JARVIS_NOTICE, "kilo": _KILO_NOTICE, "ovhcloud": _OVH_NOTICE}
 _SETTINGS_ERROR = ("AI 연결 설정이나 계정 정보를 읽지 못해 요청을 시작하지 않았어요. "
                    "잠시 후 다시 시도하고, 계속되면 AI 설정을 확인해 주세요.")
 
@@ -260,8 +269,9 @@ def open_comparison_dialog(widget) -> None:
         dialog.accept()
         body = ("같은 입력으로 순서대로 2회 요청합니다.\nA: " + labels[0] + "\nB: " + labels[1]
                 + "\n로컬 정리와 외부 전송을 구분해 확인하세요. B에는 A의 결과를 보내지 않습니다.")
-        if "jarvisclaw" in destinations:
-            body += "\n\n" + _JARVIS_NOTICE
+        for destination in dict.fromkeys(destinations):
+            if destination in PROVIDER_NOTICES:
+                body += "\n\n" + PROVIDER_NOTICES[destination]
         confirmation = widget._confirm("비교 요청 확인", body,
             lambda: widget._start_comparison(expected, frozen, destinations, profiles))
         if isinstance(confirmation, QMessageBox):

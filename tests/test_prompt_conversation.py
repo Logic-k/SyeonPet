@@ -404,6 +404,71 @@ class PromptConversationTests(unittest.TestCase):
             ai.assert_not_called()
         self.assertEqual(self.panel.input.toPlainText(), "QA_INPUT")
 
+    def test_backup_free_providers_disclose_data_handling_and_fall_back_to_jarvisclaw(self):
+        for provider, notice, note, handling in (
+                ("kilo", "kilo.ai/docs/gateway", "시간당 200회", "기록해 서비스 개선에 쓰는"),
+                ("ovhcloud", "docs.ovhcloud.com", "분당 2회", "저장하거나 공유하지 않는다고")):
+            with self.subTest(provider=provider):
+                self.panel.provider.setCurrentIndex(self.panel.provider.findData(provider))
+                self.assertIn(note, self.panel.provider_note.text())
+                self.assertIn("개인정보·비공개 자료는 보내지 마세요", self.panel.provider_note.text())
+                self.panel.input.setPlainText("QA_INPUT")
+                with patch("optimizer_chat.optimize_ai") as ai:
+                    self.panel.submit()
+                    self.assertIn(notice, self.panel._confirmation.text())
+                    self.assertIn(handling, self.panel._confirmation.text())
+                    self.assertIn("개인정보와 비공개 자료를 보내지", self.panel._confirmation.text())
+                    self.panel._confirmation.button(QMessageBox.StandardButton.No).click()
+                    self.app.processEvents()
+                    ai.assert_not_called()
+                with patch.object(self.panel, "_confirm", side_effect=lambda _title, _body, callback: callback()), \
+                        patch("optimizer_chat.optimize_ai", side_effect=RuntimeError("QA_PRIVATE")) as ai:
+                    self.panel.submit()
+                    self._wait_idle()
+                    self.assertEqual(ai.call_args.kwargs["provider"], provider)
+                self.assertEqual(self.panel.retry_other.text(), "JarvisClaw로 보내기")
+                with patch.object(self.panel, "_confirm") as confirm, patch("optimizer_chat.optimize_ai") as ai:
+                    self.panel.retry_other.click()
+                    self.assertEqual(confirm.call_count, 1)
+                    ai.assert_not_called()
+                self.assertEqual(self.panel.provider.currentData(), "jarvisclaw")
+                self.assertEqual(self.panel.input.toPlainText(), "QA_INPUT")
+
+    def test_backup_free_provider_results_record_the_fixed_model(self):
+        for provider, model in (("kilo", "kilo-auto/free"), ("ovhcloud", "gpt-oss-120b")):
+            with self.subTest(provider=provider):
+                self.panel.provider.setCurrentIndex(self.panel.provider.findData(provider))
+                self.panel.input.setPlainText("QA_INPUT_" + provider)
+                with patch.object(self.panel, "_confirm", side_effect=lambda _title, _body, callback: callback()), \
+                        patch("optimizer_chat.optimize_ai", return_value={"result": "QA_RESULT", "notes": []}) as ai:
+                    self.panel.submit()
+                    self._wait_idle()
+                self.assertEqual(ai.call_args.kwargs["provider"], provider)
+                self.assertEqual(self.panel.result_choice.currentData()["provider"], provider)
+                self.assertEqual(self.panel.result_choice.currentData()["model"], model)
+
+    def test_backup_free_provider_comparison_shows_each_notice_and_labels_models(self):
+        from syeonpet.chat.executor import destination_label, run_generate
+        self.assertEqual(destination_label("kilo"), "Kilo / kilo-auto/free")
+        self.assertEqual(destination_label("ovhcloud"), "OVHcloud / gpt-oss-120b")
+        frozen = ("QA", "QA", "", "", "", "", "auto", "balanced", [])
+        with patch("optimizer_chat.optimize_ai", return_value={"result": "QA_RESULT", "notes": []}):
+            self.assertEqual(run_generate(frozen, "ovhcloud")["_metadata"]["model"], "gpt-oss-120b")
+        self.panel.input.setPlainText("QA_SYNTHETIC")
+        with patch("optimizer_chat.optimize_ai") as ai:
+            self.panel.compare.click()
+            first, second = self.panel._comparison_choices
+            first.setCurrentIndex(first.findData("kilo"))
+            second.setCurrentIndex(second.findData("ovhcloud"))
+            button = next(b for b in self.panel._comparison_dialog.findChildren(QPushButton)
+                          if b.accessibleName() == "비교 요청 확인")
+            button.click()
+            self.assertIn("kilo.ai/docs/gateway", self.panel._confirmation.text())
+            self.assertIn("docs.ovhcloud.com", self.panel._confirmation.text())
+            self.panel._confirmation.button(QMessageBox.StandardButton.No).click()
+            self.app.processEvents()
+            ai.assert_not_called()
+
     def test_quality_view_localizes_all_condition_types_and_changes(self):
         self.panel.input.setPlainText("월요일 10시 30명")
         self.panel.result.setPlainText("화요일 11시 20명")

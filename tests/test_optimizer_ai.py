@@ -21,9 +21,13 @@ class AiOptimizerTests(unittest.TestCase):
     def setUp(self):
         self.saved_time = ai._poll_last_started
         ai._poll_last_started = None
+        self.saved_spaced = dict(ai._spaced_last_started)
+        ai._spaced_last_started.clear()
 
     def tearDown(self):
         ai._poll_last_started = self.saved_time
+        ai._spaced_last_started.clear()
+        ai._spaced_last_started.update(self.saved_spaced)
 
     def test_request_preserves_original_and_sends_only_selected_inputs(self):
         remote = io.BytesIO(response("  다듬은 결과  "))
@@ -143,6 +147,88 @@ class AiOptimizerTests(unittest.TestCase):
                 ai.optimize_ai("가상 요청", provider="jarvisclaw")
         factory.assert_called_once()
         conn.request.assert_called_once()
+
+    def test_keyless_backup_providers_use_documented_free_endpoints(self):
+        for provider, host, path, model in (
+                ("kilo", "api.kilo.ai", "/api/gateway/chat/completions", "kilo-auto/free"),
+                ("ovhcloud", "oai.endpoints.kepler.ai.cloud.ovh.net", "/v1/chat/completions", "gpt-oss-120b")):
+            remote = io.BytesIO(response("가상 연수 안내를 작성해 주세요."))
+            remote.status = 200
+            conn = MagicMock()
+            conn.getresponse.return_value = remote
+            with self.subTest(provider=provider), \
+                    patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                    patch.object(ai, "_PinnedHTTPSConnection", return_value=conn) as factory:
+                result = ai.optimize_ai("가상 연수 안내", provider=provider)
+                self.assertEqual(result["result"], "가상 연수 안내를 작성해 주세요.")
+                self.assertEqual(factory.call_args.args[:2], (host, "8.8.8.8"))
+                request = conn.request.call_args
+                self.assertEqual(request.args, ("POST", path))
+                self.assertNotIn("Authorization", request.kwargs["headers"])
+                self.assertEqual(json.loads(request.kwargs["body"])["model"], model)
+                conn.request.assert_called_once()
+
+    def test_ovhcloud_keeps_its_two_per_minute_spacing_and_one_request_at_a_time(self):
+        from syeonpet.chat.error_sanitizer import sanitize_error
+        with patch.object(ai, "_send", return_value="결과") as send, \
+                patch.object(ai.time, "monotonic", side_effect=[100, 110, 131]):
+            self.assertEqual(ai.optimize_ai("처음", provider="ovhcloud")["result"], "결과")
+            with self.assertRaisesRegex(ai.OptimizationError, "분당 2회.*20초") as wait:
+                ai.optimize_ai("두 번째", provider="ovhcloud")
+            self.assertEqual(ai.optimize_ai("세 번째", provider="ovhcloud")["result"], "결과")
+        self.assertEqual(send.call_count, 2)
+        # The chat panel shows only allow-listed errors; this one must get through.
+        self.assertEqual(sanitize_error(wait.exception), str(wait.exception))
+        ai._spaced_locks["ovhcloud"].acquire()
+        try:
+            with patch.object(ai, "_send") as send:
+                with self.assertRaisesRegex(ai.OptimizationError, "진행 중") as busy:
+                    ai.optimize_ai("요청", provider="ovhcloud")
+                send.assert_not_called()
+            self.assertEqual(sanitize_error(busy.exception), str(busy.exception))
+        finally:
+            ai._spaced_locks["ovhcloud"].release()
+
+    def test_keyless_backup_rate_limits_explain_the_shared_limit_without_retrying(self):
+        from syeonpet.chat.error_sanitizer import sanitize_error
+        for provider, pattern in (("kilo", "시간당 200회"), ("ovhcloud", "분당 2회")):
+            conn = MagicMock()
+            conn.getresponse.return_value.status = 429
+            conn.getresponse.return_value.getheader.return_value = "1"
+            with self.subTest(provider=provider), \
+                    patch.object(ai, "_resolve_public", return_value="8.8.8.8"), \
+                    patch.object(ai, "_PinnedHTTPSConnection", return_value=conn) as factory, \
+                    patch.object(ai.time, "sleep") as sleep:
+                with self.assertRaisesRegex(ai.OptimizationError, pattern) as limit:
+                    ai.optimize_ai("합성 원문", provider=provider)
+                factory.assert_called_once()
+                sleep.assert_not_called()
+                # Shown as-is in the chat panel, not replaced by "check your connection".
+                self.assertEqual(sanitize_error(limit.exception), str(limit.exception))
+                self.assertNotIn("QA_SECRET", sanitize_error(ai.OptimizationError(str(limit.exception) + " QA_SECRET")))
+
+    def test_separate_reasoning_field_is_never_returned_as_the_prompt(self):
+        # OVHcloud gpt-oss-120b sends its reasoning beside the answer.
+        body = json.dumps({"choices": [{"finish_reason": "stop", "message": {
+            "content": "가상 요청문", "reasoning": "We need to rewrite", "reasoning_content": "생각"}}]},
+            ensure_ascii=False).encode("utf-8")
+        self.assertEqual(ai._read_result(io.BytesIO(body)), "가상 요청문")
+        only_reasoning = json.dumps({"choices": [{"finish_reason": "stop", "message": {
+            "content": None, "reasoning": "We need to rewrite"}}]}).encode("utf-8")
+        with self.assertRaisesRegex(ai.OptimizationError, "비어 있습니다"):
+            ai._read_result(io.BytesIO(only_reasoning))
+
+    def test_model_inserted_special_spaces_become_plain_but_typed_ones_stay(self):
+        prompt = "30명 이내 대상, '문의 중' 표기로 11월 20일 안내문 요청해 줘."
+        reply = "30명\u00a0이내 대상, '문의\u202f중' 표기로 11월\u202f20일 안내문을 작성해 주세요."
+        with patch.object(ai, "_send", return_value=reply):
+            result = ai.optimize_ai(prompt, provider="jarvisclaw")["result"]
+        # Without normalising, the bound and quote checks re-attach the whole request.
+        self.assertEqual(result, "30명 이내 대상, '문의 중' 표기로 11월 20일 안내문을 작성해 주세요.")
+        typed = "아래 자료를 요약해 달라고 요청해 줘.\n자료: 가상\u00a0공지 7건"
+        with patch.object(ai, "_send", return_value="아래 자료를 요약해 주세요.\n자료:\n가상\u00a0공지 7건"):
+            result = ai.optimize_ai(typed, provider="jarvisclaw")["result"]
+        self.assertIn("가상\u00a0공지 7건", result)
 
     def test_invalid_or_incomplete_response_rejected(self):
         values = [response("부분", "length"), response("부분", "max_tokens"),

@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 
-from optimizer_ai import optimize_ai
+from optimizer_ai import fixed_model, optimize_ai
 from optimizer_core import create_offline_prompt, utf16_length, validate_input
 from syeonpet.chat.error_sanitizer import sanitize_error as _safe_generation_error
 from syeonpet.chat.state_codec import _append_conditions
@@ -38,9 +38,17 @@ def destination_label(destination: str, widget=None) -> str:
     if prof:
         loc = "로컬" if prof.provider == "ollama" else "외부"
         return f"{prof.provider} / {prof.model} ({loc})"
-    return {"offline": "기본 정리 / local (로컬)", "vireonix": "Vireonix / auto",
-            "pollinations-classic": "Pollinations Classic / openai",
-            "jarvisclaw": "JarvisClaw / auto/free"}.get(destination, destination)
+    if destination in _FIXED_NAMES:
+        return f"{_FIXED_NAMES[destination]} / {fixed_model(destination)}"
+    return {"offline": "기본 정리 / local (로컬)"}.get(destination, destination)
+
+
+_FIXED_NAMES = {"vireonix": "Vireonix", "pollinations-classic": "Pollinations Classic",
+                "jarvisclaw": "JarvisClaw", "kilo": "Kilo", "ovhcloud": "OVHcloud"}
+
+
+def _metadata_model(destination: str) -> str:
+    return "local" if destination == "offline" else fixed_model(destination)
 
 
 def snapshot_profiles() -> tuple:
@@ -109,8 +117,7 @@ def run_generate(frozen: tuple, destination: str, profile=None) -> dict:
     reply = dict(reply)
     reply["_metadata"] = {
         "provider": profile.provider if profile else destination,
-        "model": profile.model if profile else {"offline": "local", "vireonix": "auto",
-                                               "pollinations-classic": "openai", "jarvisclaw": "auto/free"}[destination],
+        "model": profile.model if profile else _metadata_model(destination),
         "elapsed": max(0.0, time.monotonic() - started),
     }
     return reply
@@ -216,8 +223,7 @@ def submit_confirmed(widget, text, original, revision, provider, old_ctx, next_c
             reply = dict(reply)
             reply["_metadata"] = {
                 "provider": profile.provider if profile else provider,
-                "model": profile.model if profile else {"offline": "local", "vireonix": "auto",
-                                                       "pollinations-classic": "openai", "jarvisclaw": "auto/free"}[provider],
+                        "model": profile.model if profile else _metadata_model(provider),
                 "elapsed": max(0.0, time.monotonic() - started),
             }
             try:

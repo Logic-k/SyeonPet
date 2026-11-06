@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QWidget
 from optimizer_ai import optimize_ai
 from optimizer_core import TASKS, create_offline_prompt, review_result, utf16_length, validate_input
 from syeonpet.chat.dialogs import (
-    CHAT_STYLE, _ActionRow, _StatusText, build_confirm_dialog,
+    CHAT_STYLE, PROVIDER_NOTICES, _ActionRow, _StatusText, build_confirm_dialog,
     open_clarification_dialog, open_comparison_dialog, open_library_dialog,
     open_template_dialog,
 )
@@ -39,9 +39,6 @@ _ROLE_HEADING = "확정된 문의·답변 역할 (사용자 확인):"
 _OTHER_AI = {"vireonix": ("pollinations-classic", "Pollinations Classic으로 보내기"),
              "pollinations-classic": ("vireonix", "Vireonix로 보내기"),
              "jarvisclaw": ("pollinations-classic", "Pollinations Classic으로 보내기")}
-_JARVIS_NOTICE = ("JarvisClaw는 외부 모델 제공자에게 요청을 전달할 수 있고 일부 이용 메타데이터를 "
-                  "처리할 수 있습니다. 개인정보와 비공개 자료를 보내지 마세요. "
-                  "기관 사용 승인을 확인해 주세요. 개인정보 처리방침: https://api.jarvisclaw.ai/privacy-policy")
 _SETTINGS_ERROR = ("AI 연결 설정이나 계정 정보를 읽지 못해 요청을 시작하지 않았어요. "
                    "잠시 후 다시 시도하고, 계속되면 AI 설정을 확인해 주세요.")
 
@@ -125,6 +122,12 @@ class PromptConversation(QWidget):
             self.provider_note.setText("Vireonix가 응답하지 않을 때 쓰는 예비 서비스예요. 응답에 수십 초가 걸릴 수 있고, 보낸 뒤 30초가 지나야 다시 보낼 수 있어요. " + snd)
         elif p == "jarvisclaw":
             self.provider_note.setText("로그인과 키 없이 외부 무료 AI를 사용합니다. 가용성과 모델이 바뀔 수 있습니다. 개인정보·비공개 자료는 보내지 마세요. " + snd)
+        elif p == "kilo":
+            self.provider_note.setText("로그인과 키 없이 Kilo의 무료 모델을 사용합니다. 무료 경로는 요청이 기록되어 서비스 개선에 쓰일 수 있으니 "
+                                       "개인정보·비공개 자료는 보내지 마세요. 같은 인터넷 연결에서 시간당 200회까지입니다. " + snd)
+        elif p == "ovhcloud":
+            self.provider_note.setText("로그인과 키 없이 OVHcloud(유럽)의 gpt-oss-120b를 사용합니다. 같은 인터넷 연결에서 분당 2회까지라 "
+                                       "보낸 뒤 30초가 지나야 다시 보낼 수 있어요. 개인정보·비공개 자료는 보내지 마세요. " + snd)
         elif str(p).startswith("profile:"):
             try:
                 prof = self._resolve_profile(p)
@@ -428,8 +431,9 @@ class PromptConversation(QWidget):
                     "제공자는 내용을 저장하거나 서비스 개선에 사용할 수 있습니다. "
                     "학생·학부모·직원 식별정보, 민원 원문과 비공개 문서는 제외하거나 "
                     "가상 내용으로 바꾸고 기관의 사용 정책과 허용 서비스를 확인해 주세요.\n\n전송하시겠어요?")
-            if provider == "jarvisclaw":
-                info = f"원래 요청, 추가 조건과 이전 결과를 {service}에 전송합니다.\n\n{_JARVIS_NOTICE}\n\n전송하시겠어요?"
+            if provider in PROVIDER_NOTICES:
+                info = (f"원래 요청, 추가 조건과 이전 결과를 {service}에 전송합니다.\n\n"
+                        f"{PROVIDER_NOTICES[provider]}\n\n전송하시겠어요?")
             if profile is not None and profile.provider == "ollama":
                 info = f"{service} 로컬 서버에서 원래 요청, 추가 조건과 이전 결과를 처리합니다. 로컬 처리를 시작할까요?"
             try:

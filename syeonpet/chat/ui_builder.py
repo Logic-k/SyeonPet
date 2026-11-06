@@ -28,7 +28,9 @@ def setup_chat_ui(widget) -> None:
     for text, key in (("기본 정리 (AI 사용 안 함)", "offline"),
                       ("AI 정리 · Vireonix", "vireonix"),
                       ("AI 정리 · Pollinations Classic (예비)", "pollinations-classic"),
-                      ("AI 정리 · JarvisClaw (무료)", "jarvisclaw")):
+                      ("AI 정리 · JarvisClaw (무료)", "jarvisclaw"),
+                      ("AI 정리 · Kilo (무료)", "kilo"),
+                      ("AI 정리 · OVHcloud (무료)", "ovhcloud")):
         widget.provider.addItem(text, key)
     widget.provider.setCurrentIndex(widget.provider.findData("jarvisclaw"))
 

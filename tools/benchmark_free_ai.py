@@ -49,13 +49,15 @@ def _normalize(text: str) -> str:
 def run(provider: str, cases: tuple, output) -> list[dict]:
     records = []
     last_poll_start = None
+    # Both services refuse requests started less than 30 s apart from this app.
+    spaced = provider in ("pollinations-classic", "ovhcloud")
     for title, prompt, literals in cases:
-        if provider == "pollinations-classic" and last_poll_start is not None:
+        if spaced and last_poll_start is not None:
             wait = max(0.0, 30.1 - (time.monotonic() - last_poll_start))
             if wait:
                 time.sleep(wait)
         started = time.monotonic()
-        if provider == "pollinations-classic":
+        if spaced:
             last_poll_start = started
         # Observe only the completion-state metadata, without changing the
         # product parser or recording headers and raw response bodies.
@@ -115,7 +117,7 @@ def run(provider: str, cases: tuple, output) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", help="Send fictional requests to the external provider")
-    parser.add_argument("--provider", choices=("jarvisclaw", "pollinations-classic"), required=True)
+    parser.add_argument("--provider", choices=("jarvisclaw", "pollinations-classic", "kilo", "ovhcloud"), required=True)
     parser.add_argument("--limit", type=int, default=len(CASES), choices=range(1, len(CASES) + 1))
     parser.add_argument("--case", action="append", choices=[case[0] for case in CASES],
                         help="Run selected fictional cases (repeatable); by default runs all")

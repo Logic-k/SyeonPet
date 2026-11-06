@@ -5,6 +5,8 @@
 로그인이나 키 없이 사용하려면 프롬프트 창의 **정리 방식**에서 서비스 항목을 선택합니다. 외부 서비스에 보내기 전에는 전송 내용을 확인하는 창이 나타납니다. **기본 정리 (AI 사용 안 함)**는 외부 AI를 호출하지 않고 입력을 구조화합니다.
 
 - **JarvisClaw**: 처음 선택되는 **AI 정리 · JarvisClaw (무료)**입니다. 앱을 열거나 선택하는 것만으로 전송되지 않으며, 매 요청마다 내용과 대상을 확인한 뒤 사용자가 전송을 선택해야 합니다. 공식 안내의 `auto/free` 모델은 로그인과 API 키 없이 쓸 수 있으며 IP별 사용 제한이 있습니다. 여러 모델 중 하나가 응답하므로 속도와 품질이 달라질 수 있습니다. 외부 모델 공급자의 처리 조건과 기관 지침을 확인하세요.
+- **Kilo (무료)**: Kilo Gateway의 `kilo-auto/free`를 로그인과 키 없이 씁니다. [공식 안내](https://kilo.ai/docs/gateway/authentication)에 따르면 같은 IP에서 시간당 200회까지이고, 응답하는 무료 모델은 서버에서 바뀝니다. [모델 안내](https://kilo.ai/docs/gateway/models-and-providers)는 이 경로가 프롬프트와 응답을 기록해 서비스 개선에 쓰는 제공자로 요청을 보낼 수 있으니 개인정보와 기밀 자료를 보내지 말라고 적고 있습니다. 실패하면 **JarvisClaw로 보내기**를 제안합니다.
+- **OVHcloud (무료)**: OVHcloud AI Endpoints의 `gpt-oss-120b`를 키 없이 씁니다. [공식 안내](https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-capabilities)에 따르면 익명 사용은 같은 IP·모델에서 분당 2회까지입니다. 그래서 앱은 보낸 뒤 30초가 지나야 다시 보냅니다. 같은 문서는 유럽에서 운영하고 입력을 저장하거나 공유하지 않는다고 설명하지만, 다른 부분에는 요청마다 키가 필요하다는 문장도 있어 익명 사용이 계속된다고 보장할 수 없습니다. 실패하면 **JarvisClaw로 보내기**를 제안합니다.
 - **Vireonix / Pollinations Classic**: 키 없이 선택할 수 있는 기존 서비스입니다. Pollinations의 공식 개인정보처리방침에는 계정 없는 Free API Classic이 명시되어 있습니다. 서비스 장애, 응답 지연과 이용 조건 변경이 생길 수 있습니다. 아래 시험 결과는 지속적인 사용 가능성이나 기관의 승인 여부를 보장하지 않습니다.
 
 **Murakumo**는 키 없는 대안으로 조사했지만 앱 요청에서 반복적으로 오류가 발생해 현재 선택지에 추가하지 않았습니다. [서비스 안내](https://murakumo.cloud/free)는 제3자 노드 운영자가 무료 요청의 입력과 응답을 볼 수 있다고 설명합니다. [이용 약관](https://murakumo.cloud/legal-terms)은 현재 초안이라고 표시하며 조직을 대신한 이용에는 권한이 필요하다고 명시합니다.

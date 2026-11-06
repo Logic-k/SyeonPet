@@ -16,6 +16,8 @@ _OTHER_AI = {
     "vireonix": ("pollinations-classic", "Pollinations Classic으로 보내기"),
     "pollinations-classic": ("vireonix", "Vireonix로 보내기"),
     "jarvisclaw": ("pollinations-classic", "Pollinations Classic으로 보내기"),
+    "kilo": ("jarvisclaw", "JarvisClaw로 보내기"),
+    "ovhcloud": ("jarvisclaw", "JarvisClaw로 보내기"),
 }
 
 

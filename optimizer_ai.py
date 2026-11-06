@@ -79,7 +79,22 @@ _PROVIDERS = {
     "pollinations-classic": ("https://text.pollinations.ai/v1/chat/completions", "openai"),
     # The documented no-credential route is restricted to this free alias.
     "jarvisclaw": ("https://api.jarvisclaw.ai/v1/chat/completions", "auto/free"),
+    # Kilo Gateway serves free models without credentials; anonymous callers
+    # share 200 requests per hour per IP (kilo.ai/docs/gateway/authentication).
+    "kilo": ("https://api.kilo.ai/api/gateway/chat/completions", "kilo-auto/free"),
+    # OVHcloud AI Endpoints anonymous tier: 2 requests per minute per IP and
+    # model (OVHcloud AI Endpoints capabilities guide).
+    "ovhcloud": ("https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions", "gpt-oss-120b"),
 }
+# Keyless tiers that allow only a few requests per minute: keep this process
+# under the documented rate. Other users on the same connection still count.
+_SPACED_PROVIDERS = {"ovhcloud": ("OVHcloud", 30, "같은 인터넷 연결에서 분당 2회")}
+_spaced_locks = {name: threading.Lock() for name in _SPACED_PROVIDERS}
+_spaced_last_started = {}
+# Models sometimes put U+202F/U+00A0-style spaces inside dates and quoted
+# phrases ("11월\u202f20일"). Literal bound and quote checks then miss them and
+# re-attach the whole request, and the odd spaces survive pasting.
+_ODD_SPACES = "\u00a0\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f"
 _PROFILE_PROVIDERS = frozenset(("chatgpt-subscription", "groq", "openrouter", "gemini", "ollama"))
 _TASKS = {
     "auto": "유형 지정 안 함", "general": "일반적인 질문이나 요청",
@@ -108,6 +123,17 @@ class OptimizationError(ValueError):
 
 def _utf16_length(value: str) -> int:
     return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+
+
+def fixed_model(provider: str) -> str:
+    """Model alias sent to a built-in keyless provider, for labels and metadata."""
+    return _PROVIDERS[provider][1]
+
+
+def _plain_spaces(result: str, *sources: str) -> str:
+    """Turn model-inserted special spaces into plain ones; keep any the user typed."""
+    table = {ord(ch): " " for ch in _ODD_SPACES if not any(ch in source for source in sources)}
+    return result.translate(table)
 
 
 def _validate(prompt, context, task, detail, provider, revision, previous_result):
@@ -328,6 +354,12 @@ def _send(url, model, payload, provider, *, system_prompt: str | None = None):
                 if status == 429 and provider == "vireonix":
                     message = ("서비스 사용량 제한에 도달했습니다 (HTTP 429). Vireonix는 같은 인터넷 "
                                "연결을 쓰는 사용자들이 시간당 한도를 함께 씁니다. 잠시 후 다시 시도해 주세요.")
+                elif status == 429 and provider == "kilo":
+                    message = ("Kilo 무료 요청 한도에 도달했습니다 (HTTP 429). 같은 인터넷 연결을 쓰는 사용자들이 "
+                               "시간당 200회 한도를 함께 씁니다. 잠시 후 다시 시도하거나 다른 AI를 선택해 주세요.")
+                elif status == 429 and provider == "ovhcloud":
+                    message = ("OVHcloud 무료 익명 한도에 도달했습니다 (HTTP 429). 같은 인터넷 연결을 쓰는 사용자들이 "
+                               "분당 2회 한도를 함께 씁니다. 1분쯤 뒤 다시 시도하거나 다른 AI를 선택해 주세요.")
                 elif status == 429:
                     message = "서비스 사용량 제한에 도달했습니다 (HTTP 429). 잠시 후 다시 시도해 주세요."
                 elif status == 402 and provider == "pollinations-classic":
@@ -377,8 +409,9 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
                 system_prompt: str | None = None) -> dict:
     """Rewrite explicitly supplied text; synchronous, use a worker thread.
 
-    Pollinations concurrency and cooldown are per process; the provider can
-    additionally apply IP-wide limits, including requests from other apps.
+    Pollinations and OVHcloud concurrency and cooldown are per process; the
+    provider can additionally apply IP-wide limits, including requests from
+    other apps.
     """
     global _poll_last_started
     _validate(prompt, context, task, detail, provider, revision, previous_result)
@@ -426,11 +459,28 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
             result = _send(url, model, payload, provider, system_prompt=system_prompt)
         finally:
             _poll_lock.release()
+    elif provider in _SPACED_PROVIDERS:
+        url, model = _PROVIDERS[provider]
+        label, interval, limit = _SPACED_PROVIDERS[provider]
+        lock = _spaced_locks[provider]
+        if not lock.acquire(blocking=False):
+            raise OptimizationError(f"{label} 요청이 진행 중입니다. 완료 후 다시 시도해 주세요.")
+        try:
+            now = time.monotonic()
+            last = _spaced_last_started.get(provider)
+            if last is not None and now - last < interval:
+                remaining = max(1, int(interval - (now - last) + 0.999))
+                raise OptimizationError(f"{label} 무료 한도({limit})를 지키기 위해 {remaining}초 후 다시 시도해 주세요.")
+            _spaced_last_started[provider] = now
+            result = _send(url, model, payload, provider, system_prompt=system_prompt)
+        finally:
+            lock.release()
     else:
         url, model = _PROVIDERS[provider]
         result = _send(url, model, payload, provider, system_prompt=system_prompt)
         if provider == "vireonix":
             result = _unwrap_vireonix(result, prompt)
+    result = _plain_spaces(result, prompt, context, revision, previous_result)
     # A revision may change values on purpose, so only a first rewrite gets
     # the original wording re-attached when a literal check finds it lost.
     result, notes = keep_original_details(prompt, result, check_details=not revision)

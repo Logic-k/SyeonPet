@@ -42,6 +42,11 @@ _KNOWN_KOREAN = {
     "서비스 사용량 제한에 도달했습니다 (HTTP 429). 잠시 후 다시 시도해 주세요.",
     "Pollinations Classic의 요청 간격이나 이용 한도 문제일 수 있습니다 (HTTP 402).",
     "JarvisClaw 무료 요청을 처리할 수 없습니다 (HTTP 402). 잠시 후 다시 시도해 주세요.",
+    "Kilo 무료 요청 한도에 도달했습니다 (HTTP 429). 같은 인터넷 연결을 쓰는 사용자들이 "
+    "시간당 200회 한도를 함께 씁니다. 잠시 후 다시 시도하거나 다른 AI를 선택해 주세요.",
+    "OVHcloud 무료 익명 한도에 도달했습니다 (HTTP 429). 같은 인터넷 연결을 쓰는 사용자들이 "
+    "분당 2회 한도를 함께 씁니다. 1분쯤 뒤 다시 시도하거나 다른 AI를 선택해 주세요.",
+    "OVHcloud 요청이 진행 중입니다. 완료 후 다시 시도해 주세요.",
     "ChatGPT 요청이 취소되었습니다.",
     "ChatGPT 계정 연결을 확인하고 필요하면 다시 연결해 주세요.",
     "ChatGPT 사용이 현재 제한되어 있습니다. 잠시 후 다시 확인해 주세요.",
@@ -70,6 +75,8 @@ def sanitize_error(exc: Exception | str) -> str:
     if message in _KNOWN_KOREAN:
         return message
     if re.fullmatch(r"AI 서비스가 일시적으로 응답하지 않습니다 \(HTTP 50[234]\)\. 잠시 후 다시 시도해 주세요\.", message):
+        return message
+    if re.fullmatch(r"OVHcloud 무료 한도\(같은 인터넷 연결에서 분당 2회\)를 지키기 위해 [1-9][0-9]?초 후 다시 시도해 주세요\.", message):
         return message
     return _SAFE_DEFAULT
 
