@@ -120,6 +120,45 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.store.load(), [])
         app.processEvents()
 
+    def test_dialog_list_and_preview_show_saved_date(self):
+        # C2 regression: an entry must carry its date in the visible UI.
+        from optimizer_library import LibraryDialog
+        app = QApplication.instance() or QApplication([])
+        self.store.merge([item(mode="주간 업무 보고", createdAt="2026-11-12T07:42:31Z")])
+        with patch("optimizer_library.LibraryStore", return_value=self.store):
+            dialog = LibraryDialog(None, "원문", "결과")
+        self.addCleanup(dialog.close)
+        self.assertRegex(dialog.entries.item(0).text(), r"\d{4}-\d{2}-\d{2}")
+        dialog.entries.setCurrentRow(0)
+        preview = dialog.preview.toPlainText()
+        self.assertIn("저장 날짜", preview)
+        self.assertRegex(preview, r"\d{4}-\d{2}-\d{2}")
+        app.processEvents()
+
+    def test_out_of_range_dates_fall_back_without_breaking_dialog(self):
+        # N4-1 regression: imported backups pass validation with createdAt values
+        # that astimezone() cannot convert on Windows (pre-1970 or year >9999
+        # after the local offset). They must render with the empty-date fallback
+        # instead of propagating OSError up through the dialog constructor.
+        from optimizer_library import LibraryDialog, _entry_date
+        app = QApplication.instance() or QApplication([])
+        edge_stamps = ("0001-01-01T00:00:00Z", "1969-12-31T15:00:00Z",
+                       "9999-12-31T23:59:59Z")
+        for stamp in edge_stamps:
+            self.assertEqual(_entry_date(item(createdAt=stamp)), "", stamp)
+        self.store.merge([item(createdAt="0001-01-01T00:00:00Z"),
+                          item(id="two", createdAt="1969-12-31T15:00:00Z"),
+                          item(id="three", createdAt="9999-12-31T23:59:59Z")])
+        with patch("optimizer_library.LibraryStore", return_value=self.store):
+            dialog = LibraryDialog(None, "원문", "결과")
+        self.addCleanup(dialog.close)
+        self.assertEqual(dialog.entries.count(), 3)
+        for row in range(3):
+            self.assertNotRegex(dialog.entries.item(row).text(), r"\d{4}-\d{2}-\d{2}")
+        dialog.entries.setCurrentRow(0)
+        self.assertIn("저장 날짜: 알 수 없음", dialog.preview.toPlainText())
+        app.processEvents()
+
     def test_emoji_title_uses_utf16_limit(self):
         from optimizer_library import LibraryDialog
         app = QApplication.instance() or QApplication([])

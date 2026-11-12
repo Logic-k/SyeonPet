@@ -65,7 +65,8 @@ def get_open_template_snapshot(widget):
 def export_update_state(widget) -> dict:
     if widget._busy or QApplication.activeModalWidget() is not None:
         raise RuntimeError("진행 중인 요청이나 확인창을 먼저 마쳐 주세요.")
-    for name in ("_confirmation", "_library_dialog", "_settings_dialog", "_comparison_dialog"):
+    for name in ("_confirmation", "_library_dialog", "_settings_dialog", "_comparison_dialog",
+                 "_flow_dialog"):
         dialog = getattr(widget, name, None)
         try:
             if name == "_settings_dialog" and dialog is not None and dialog.is_busy:

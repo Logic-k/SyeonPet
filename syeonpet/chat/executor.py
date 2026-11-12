@@ -17,7 +17,16 @@ def reload_profiles(widget) -> None:
     for idx in range(widget.provider.count() - 1, -1, -1):
         if str(widget.provider.itemData(idx)).startswith("profile:"):
             widget.provider.removeItem(idx)
-    for prof in load_profiles():
+    try:
+        profiles = load_profiles()
+    except (OSError, ValueError):
+        # A damaged ai_profiles.json must not crash the chat window; keep the
+        # built-in destinations and let _provider_changed show the notice.
+        widget._profiles_unreadable = True
+        profiles = []
+    else:
+        widget._profiles_unreadable = False
+    for prof in profiles:
         widget.provider.addItem(f"{prof.provider} / {prof.model}", "profile:" + prof.id)
     widget.provider.setCurrentIndex(max(0, widget.provider.findData(sel)))
 

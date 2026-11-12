@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QLockFile, QStandardPaths, Signal
-from PySide6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel,
                                QListWidget, QMessageBox, QPushButton,
                                QTextEdit, QVBoxLayout)
 
@@ -24,6 +24,20 @@ DETAILS = {"balanced", "concise", "detailed"}
 
 def _length(value: str) -> int:
     return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+
+
+def _entry_date(item: dict) -> str:
+    """'YYYY-MM-DD' display date for a stored entry ('' when unparseable)."""
+    try:
+        stamp = datetime.fromisoformat(item.get("createdAt", "").replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        # astimezone() raises OSError/OverflowError for instants the local
+        # CRT cannot represent (e.g. imported backups with createdAt year <1970
+        # or conversions overflowing year 9999) — degrade to '' like bad parses.
+        return stamp.astimezone().strftime("%Y-%m-%d")
+    except (AttributeError, TypeError, ValueError, OSError, OverflowError):
+        return ""
 
 
 def validate_library(document: object) -> list[dict]:
@@ -198,6 +212,7 @@ class LibraryDialog(QDialog):
         layout.addWidget(self.preview, 2)
         row = QHBoxLayout()
         for label, callback in (("현재 작업 저장", self._save), ("선택 항목 불러오기", self._restore),
+                                ("선택 항목 복사", self._copy_selected),
                                 ("선택 삭제", self.delete_item),
                                 ("JSON 백업", self._export), ("JSON 가져오기", self._import)):
             button = QPushButton(label)
@@ -220,14 +235,19 @@ class LibraryDialog(QDialog):
             return
         self.entries.clear()
         for item in self.items:
-            self.entries.addItem(item["title"] or item["prompt"][:40])
+            title = item["title"] or item["prompt"][:40]
+            mode = item.get("mode") or ""
+            label = f"[{mode}] {title}" if mode else title
+            date = _entry_date(item)
+            self.entries.addItem(f"{label} · {date}" if date else label)
         self.preview.clear()
 
     def _preview(self, row):
         if 0 <= row < len(self.items):
             item = self.items[row]
             revisions = "\n".join(item.get("syeonRevisions", [])) or "없음"
-            self.preview.setPlainText(f"원래 요청:\n{item['prompt']}\n\n추가 조건:\n{revisions}\n\n정리 결과:\n{item['result']}")
+            date = _entry_date(item) or "알 수 없음"
+            self.preview.setPlainText(f"저장 날짜: {date}\n\n원래 요청:\n{item['prompt']}\n\n추가 조건:\n{revisions}\n\n정리 결과:\n{item['result']}")
         else:
             self.preview.clear()
 
@@ -252,6 +272,24 @@ class LibraryDialog(QDialog):
             self._notify("저장 완료", "현재 작업을 션의 보관함에 저장했습니다.")
         except (OSError, ValueError) as exc:
             self._notify("저장 실패", f"기존 보관함은 변경하지 않았습니다.\n{exc}", QMessageBox.Icon.Warning)
+
+    def _copy_selected(self):
+        row = self.entries.currentRow()
+        if not 0 <= row < len(self.items):
+            self._notify("항목 선택", "복사할 항목을 먼저 선택해 주세요.")
+            return
+        result = self.items[row].get("result", "")
+        if not result:
+            self._notify("복사할 내용이 없습니다", "선택한 항목에 정리 결과가 없습니다.")
+            return
+        try:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(result)
+            copied = clipboard.text().replace("\r\n", "\n") == result.replace("\r\n", "\n")
+        except RuntimeError:
+            copied = False
+        self._notify("복사 완료" if copied else "복사 실패",
+                     "선택한 항목의 정리 결과를 복사했습니다." if copied else "다시 시도해 주세요.")
 
     def _restore(self):
         row = self.entries.currentRow()

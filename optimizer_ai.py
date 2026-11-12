@@ -403,35 +403,13 @@ def _send(url, model, payload, provider, *, system_prompt: str | None = None):
         time.sleep(delay)
 
 
-def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vireonix",
-                revision="", previous_result="", *, profile: AIProfile | None = None,
-                cancel: threading.Event | None = None,
-                system_prompt: str | None = None) -> dict:
-    """Rewrite explicitly supplied text; synchronous, use a worker thread.
+def _dispatch(provider, payload, profile, cancel, system_prompt):
+    """Send one payload to the chosen service, keeping each service's pacing rules.
 
-    Pollinations and OVHcloud concurrency and cooldown are per process; the
-    provider can additionally apply IP-wide limits, including requests from
-    other apps.
+    Returns (raw reply text, metadata). Shared by optimize_ai and ask_ai so
+    Pollinations and OVHcloud spacing cannot be bypassed by another caller.
     """
     global _poll_last_started
-    _validate(prompt, context, task, detail, provider, revision, previous_result)
-    if cancel is not None and cancel.is_set():
-        raise OptimizationError("정리 요청을 취소했습니다.")
-    if provider in _PROFILE_PROVIDERS:
-        if profile is None or profile.provider != provider:
-            raise OptimizationError("선택한 AI의 연결 설정을 다시 확인해 주세요.")
-    elif profile is not None:
-        raise OptimizationError("기존 정리 방식에는 별도 AI 연결 설정을 사용하지 않습니다.")
-    # A fresh random id per user action stops the service from answering with
-    # a stored reply to a similar earlier request: on 2026-10-30 Vireonix
-    # returned "월요일" and "3개" for requests changed to "화요일" and "4개".
-    # Retries of the same action reuse the same body.
-    payload = {"request_id": secrets.token_hex(8), "task": _TASKS[task], "detail": _DETAILS[detail],
-               "original_request": prompt, "context": context}
-    if revision:
-        payload["revision"] = revision
-    if previous_result:
-        payload["previous_result"] = previous_result
     metadata = {}
     if provider in _PROFILE_PROVIDERS:
         from ai_backends import generate
@@ -478,8 +456,40 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
     else:
         url, model = _PROVIDERS[provider]
         result = _send(url, model, payload, provider, system_prompt=system_prompt)
-        if provider == "vireonix":
-            result = _unwrap_vireonix(result, prompt)
+    return result, metadata
+
+
+def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vireonix",
+                revision="", previous_result="", *, profile: AIProfile | None = None,
+                cancel: threading.Event | None = None,
+                system_prompt: str | None = None) -> dict:
+    """Rewrite explicitly supplied text; synchronous, use a worker thread.
+
+    Pollinations and OVHcloud concurrency and cooldown are per process; the
+    provider can additionally apply IP-wide limits, including requests from
+    other apps.
+    """
+    _validate(prompt, context, task, detail, provider, revision, previous_result)
+    if cancel is not None and cancel.is_set():
+        raise OptimizationError("정리 요청을 취소했습니다.")
+    if provider in _PROFILE_PROVIDERS:
+        if profile is None or profile.provider != provider:
+            raise OptimizationError("선택한 AI의 연결 설정을 다시 확인해 주세요.")
+    elif profile is not None:
+        raise OptimizationError("기존 정리 방식에는 별도 AI 연결 설정을 사용하지 않습니다.")
+    # A fresh random id per user action stops the service from answering with
+    # a stored reply to a similar earlier request: on 2026-10-30 Vireonix
+    # returned "월요일" and "3개" for requests changed to "화요일" and "4개".
+    # Retries of the same action reuse the same body.
+    payload = {"request_id": secrets.token_hex(8), "task": _TASKS[task], "detail": _DETAILS[detail],
+               "original_request": prompt, "context": context}
+    if revision:
+        payload["revision"] = revision
+    if previous_result:
+        payload["previous_result"] = previous_result
+    result, metadata = _dispatch(provider, payload, profile, cancel, system_prompt)
+    if provider == "vireonix":
+        result = _unwrap_vireonix(result, prompt)
     result = _plain_spaces(result, prompt, context, revision, previous_result)
     # A revision may change values on purpose, so only a first rewrite gets
     # the original wording re-attached when a literal check finds it lost.
@@ -491,3 +501,34 @@ def optimize_ai(prompt, context="", task="auto", detail="balanced", provider="vi
         "AI가 원문의 의미와 조건을 유지했는지 사용 전에 확인하세요.",
         "모델의 응답 개선 효과는 별도의 비교 평가가 필요합니다.",
     ], "mode": "ai", **metadata}
+
+
+def ask_ai(provider, instructions, payload, *, profile: AIProfile | None = None,
+           cancel: threading.Event | None = None) -> str:
+    """Send caller-supplied instructions and a JSON payload to a chosen AI service.
+
+    Used by the guided flow for auxiliary requests (supplementary questions).
+    The caller must obtain the user's transmission consent first; this is
+    synchronous, so run it in a worker thread. Nothing is persisted here.
+    """
+    if provider not in (*_PROVIDERS, *_PROFILE_PROVIDERS):
+        raise OptimizationError("설정한 AI 정리 방식을 선택해 주세요.")
+    if not isinstance(instructions, str) or not instructions.strip() or not isinstance(payload, dict):
+        raise OptimizationError("AI 요청 형식이 올바르지 않습니다.")
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise OptimizationError("AI 요청 형식이 올바르지 않습니다.") from exc
+    if _utf16_length(instructions) > 30_000 or _utf16_length(serialized) > 30_000:
+        raise OptimizationError("요청이 너무 큽니다. 내용을 줄여 다시 시도해 주세요.")
+    if cancel is not None and cancel.is_set():
+        raise OptimizationError("정리 요청을 취소했습니다.")
+    if provider in _PROFILE_PROVIDERS:
+        if profile is None or profile.provider != provider:
+            raise OptimizationError("선택한 AI의 연결 설정을 다시 확인해 주세요.")
+    elif profile is not None:
+        raise OptimizationError("기존 정리 방식에는 별도 AI 연결 설정을 사용하지 않습니다.")
+    # A fresh random id per action stops a service replaying a stored reply.
+    body = dict(payload, request_id=secrets.token_hex(8))
+    result, _metadata = _dispatch(provider, body, profile, cancel, instructions)
+    return result

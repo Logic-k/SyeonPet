@@ -115,6 +115,9 @@ class PromptConversation(QWidget):
         self._consent_epoch += 1
         self._hide_other_ai()
         p = self.provider.currentData()
+        if getattr(self, "_profiles_unreadable", False):
+            self.provider_note.setText(_SETTINGS_ERROR)
+            return
         snd = "선택한 외부 서비스로 원문과 추가 조건, 이전 결과가 전송됩니다. 전송 전 다시 확인합니다."
         if p == "offline":
             self.provider_note.setText("입력한 문장을 그대로 구조화합니다. 자연스러운 재작성은 AI 방식을 선택해 주세요.")
@@ -220,6 +223,63 @@ class PromptConversation(QWidget):
 
     def _open_library(self):
         open_library_dialog(self)
+
+    def _open_flow(self):
+        """Open the guided diagnose → ask-back → completed-prompt workflow."""
+        from optimizer_flow import show_flow_dialog
+        existing = self._flow_dialog
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.raise_()
+                    existing.activateWindow()
+                    seed = self.input.toPlainText().strip()
+                    if seed and not existing.input_edit.toPlainText().strip():
+                        existing.input_edit.setPlainText(seed)
+                    return
+                existing.deleteLater()  # A closed dialog is released, not reused.
+            except RuntimeError:
+                pass
+            self._flow_dialog = None
+        if self.provider.currentData() != "offline" and self._flow_provider()[0] == "offline":
+            self.status.setText("선택한 AI 설정을 읽지 못해 단계별 완성형은 이 기기에서만 처리해요.")
+        self._flow_dialog = show_flow_dialog(
+            self, self.input.toPlainText().strip(),
+            provider_getter=self._flow_provider,
+            on_finished=self._accept_flow_result)
+
+    def _flow_provider(self):
+        """Resolve the selected destination to (provider_id, profile|None)."""
+        destination = self.provider.currentData()
+        if destination == "offline":
+            return ("offline", None)
+        try:
+            profile = self._resolve_profile(destination)
+        except Exception:
+            return ("offline", None)
+        return (profile.provider, profile) if profile is not None else (destination, None)
+
+    def _accept_flow_result(self, text, label, original):
+        """Insert a completed prompt produced by the flow into the result list."""
+        if not isinstance(text, str) or not text.strip():
+            return
+        if self._busy:
+            self.status.setText("정리 중이라 완성형을 결과 목록에 넣지 못했어요. "
+                                "보관함에는 저장됐으니 보관함에서 불러올 수 있어요.")
+            self._show_notice("정리 중이라 완성형을 목록에 넣지 못했어요. 보관함에는 저장돼 있어요.")
+            return
+        self._save_result()
+        if not self.original:
+            self.original = original
+            self._update_input_example()
+            self.conversation.setPlainText("션: 단계별 완성형으로 프롬프트를 만들었어요.\n\n나: " + original)
+        self.results.append(text)
+        self._result_revision_counts.append(len(self.revisions))
+        self._result_review_inputs.append(None)
+        self.result_choice.addItem(f"완성형 · {label}")
+        self._select_result(len(self.results) - 1)
+        self.status.setText(f"'{label}' 형식의 완성형 프롬프트를 가져왔어요. 필요하면 편집하고 복사해 주세요.")
+        self.result_ready.emit()
 
     def _restore_library(self, item):
         if self._busy:
@@ -358,7 +418,7 @@ class PromptConversation(QWidget):
         changed = busy != self._busy
         self._busy = busy
         for c in (self.input, self.send, self.provider, self.task, self.detail, self.template, self.library,
-                  self.reset, self.result, self.result_choice, self.fill_toggle, self.fill_panel,
+                  self.flow, self.reset, self.result, self.result_choice, self.fill_toggle, self.fill_panel,
                   self.ai_settings, self.clarify, self.compare):
             c.setEnabled(not busy)
         self.send.setEnabled(not busy and not self._sleep_paused)
@@ -466,7 +526,13 @@ class PromptConversation(QWidget):
                 self._profile_snapshot())
 
     def _submit_if_unchanged(self, expected, *args):
-        if self._request_snapshot() != expected:
+        try:
+            changed = self._request_snapshot() != expected
+        except Exception:
+            self.status.setText(_SETTINGS_ERROR)
+            self._show_notice(_SETTINGS_ERROR)
+            return
+        if changed:
             self.status.setText("확인 중 입력이나 설정이 바뀌어 전송하지 않았어요. 내용을 다시 확인해 주세요.")
             self._show_notice("입력이나 설정이 바뀌어 전송하지 않았어요. 다시 확인해 주세요.")
             return

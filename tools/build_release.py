@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_FILES = (
     "ai_backends.py", "ai_profiles.py", "ai_secrets.py", "ai_settings.py", "chatgpt_auth.py",
     "behavior.py", "bubble.py", "chat.py", "focus_timer.py", "main.py", "motion_policy.py", "onboarding.py",
-    "optimizer_ai.py", "optimizer_chat.py", "optimizer_core.py",
+    "optimizer_ai.py", "optimizer_chat.py", "optimizer_core.py", "optimizer_flow.py",
     "optimizer_library.py", "optimizer_templates.py", "pet.py", "prompt_quality.py",
     "version.py", "update_checker.py", "update_trust.py", "updater_core.py",
     "updater_switch.py", "updater_ui.py", "wardrobe.py", "wardrobe_packs.py",
