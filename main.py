@@ -44,7 +44,7 @@ from behavior import BehaviorController
 from bubble import SpeechBubble
 from chat import ChatPanel
 from focus_timer import FocusTimer
-from motion_policy import MotionPreference, effective_reduced_motion
+from motion_policy import MotionPreference, effective_reduced_motion, resume_motion_changes
 from onboarding import OnboardingTour
 from pet import ASSETS, PetWidget, SpriteBank
 from syeonpet.pet.companion_care import OfficeCareScheduler
@@ -412,6 +412,27 @@ def main() -> int:
 
     # Clean Top-Level Context Menu (<= 9 actions/submenus added directly to menu)
     menu.addAction(motion_status)
+    # Shown only while motion is reduced: one click lets Syeon move again.
+    act_resume_motion = menu.addAction("🏃 션 움직임 켜기")
+    act_resume_motion.setVisible(False)
+
+    def resume_motion():
+        changes = resume_motion_changes(
+            motion_preference.reduced, settings_actions["follow_windows"].isChecked(),
+            settings_actions["quiet"].isChecked())
+        for key, value in changes.items():
+            save_preference(key, value)
+        if "reduced_motion" in changes:
+            settings_actions["quiet"].setChecked(False)
+        if "follow_windows_motion" in changes:
+            settings_actions["follow_windows"].setChecked(False)
+        apply_motion_preference()
+        if "follow_windows_motion" in changes:
+            bubble.show_temporary("다시 움직일게요! 설정의 'Windows 동작 줄이기 따르기'로 되돌릴 수 있어요.", 5000)
+        else:
+            bubble.show_temporary("다시 움직일게요!", 3000)
+
+    act_resume_motion.triggered.connect(resume_motion)
     act_work = menu.addAction("✨ 션 비서 열기 (초안 · 요약)")
     act_work.triggered.connect(lambda: chat_panel.show_section_near_pet("work"))
     act_finder = menu.addAction("🔍 내 파일 찾기 (폴더 탐정)")
@@ -514,6 +535,9 @@ def main() -> int:
         motion_notice.setText("Windows 동작 줄이기 적용 중" if from_windows else "고요 모드 · 프롬프트 작업은 계속할 수 있어요")
         motion_status.setText(motion_notice.text())
         motion_status.setVisible(enabled)
+        act_resume_motion.setText("🏃 션 움직임 켜기 (Windows 동작 줄이기 무시)" if from_windows
+                                  else "🏃 션 움직임 켜기 (고요 모드 끄기)")
+        act_resume_motion.setVisible(enabled)
         for act in motion_actions.values():
             act.setEnabled(not enabled)
         settings_actions["blend"].setEnabled(not enabled)

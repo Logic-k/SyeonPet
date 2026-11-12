@@ -30,6 +30,20 @@ def effective_reduced_motion(system_reduced: bool, follow_windows: bool, quiet: 
     return quiet or (follow_windows and system_reduced)
 
 
+def resume_motion_changes(system_reduced: bool, follow_windows: bool, quiet: bool) -> dict[str, bool]:
+    """Preference changes that let Syeon move again in one click.
+
+    Turns off whichever switch is currently holding motion back: the app's
+    quiet mode and/or following the Windows "reduce motion" setting.
+    """
+    changes = {}
+    if quiet:
+        changes["reduced_motion"] = False
+    if follow_windows and system_reduced:
+        changes["follow_windows_motion"] = False
+    return changes
+
+
 class _MotionFilter(QAbstractNativeEventFilter):
     def __init__(self, owner: MotionPreference) -> None:
         super().__init__()

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QApplication
 from behavior import BehaviorController
 from bubble import SpeechBubble
 from motion_policy import (MotionPreference, WM_SETTINGCHANGE, effective_reduced_motion,
-                           read_windows_reduced_motion)
+                           read_windows_reduced_motion, resume_motion_changes)
 from onboarding import OnboardingTour
 from pet import PetWidget
 from test_pet_motion import FakeBank
@@ -87,6 +87,15 @@ class ReducedMotionTests(unittest.TestCase):
         self.assertTrue(effective_reduced_motion(True, False, True))
         self.assertTrue(effective_reduced_motion(False, False, True))
         self.assertFalse(effective_reduced_motion(False, True, False))
+
+    def test_one_click_resume_turns_off_whatever_holds_motion(self):
+        for system, follow, quiet in ((True, True, False), (False, False, True), (True, True, True)):
+            changes = resume_motion_changes(system, follow, quiet)
+            self.assertFalse(effective_reduced_motion(
+                system, changes.get("follow_windows_motion", follow),
+                changes.get("reduced_motion", quiet)))
+        # Following Windows stays on when Windows is not asking for less motion.
+        self.assertEqual(resume_motion_changes(False, True, True), {"reduced_motion": False})
 
     def test_unknown_initial_query_does_not_force_reduction(self):
         policy = self.policy(None)
