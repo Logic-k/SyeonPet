@@ -36,7 +36,7 @@ if __name__ == "__main__":
             print(message, file=sys.stderr)
         raise SystemExit(1)
 
-from PySide6.QtCore import QObject, QPoint, QSettings, QTimer, QUrl, SIGNAL
+from PySide6.QtCore import QObject, QPoint, QSettings, QTimer, QUrl, SIGNAL, Qt
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QMessageBox, QSystemTrayIcon, QWidgetAction
 
@@ -270,6 +270,10 @@ def set_autostart(enabled: bool):
 def main() -> int:
     cfg = load_config()
     app = QApplication(sys.argv)
+    # Every window is styled with light backgrounds. Under Windows dark mode
+    # Qt would switch the default text to white, making labels and buttons
+    # vanish, so the app keeps the light scheme regardless of the system.
+    app.styleHints().setColorScheme(Qt.ColorScheme.Light)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("션 데스크탑 펫")
     motion_preference = MotionPreference(app)

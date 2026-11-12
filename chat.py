@@ -6,7 +6,7 @@ import os
 from PySide6.QtCore import QPoint, QSettings, QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox,
+    QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QScrollArea, QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -46,7 +46,7 @@ class ChatPanel(QWidget):
             QLabel#windowControlLabel { color: #344e60; font-size: 9pt; }
             QPushButton#pinBtn { border: 1px solid #c0d1de; border-radius: 4px; padding: 3px 6px; background: #fff; font-size: 9pt; }
             QPushButton#pinBtn:checked { background: #e0f2fe; border-color: #38bdf8; color: #0369a1; font-weight: bold; }
-            QPushButton#sectionPill { border: 1px solid #d0dfea; border-radius: 14px; padding: 6px 12px; background: #ffffff; color: #2c4253; font-weight: bold; font-size: 9.5pt; }
+            QPushButton#sectionPill { border: 1px solid #d0dfea; border-radius: 14px; padding: 4px 12px; background: #ffffff; color: #2c4253; font-weight: bold; font-size: 9.5pt; }
             QPushButton#sectionPill:hover { background: #eaf3f9; border-color: #adc6db; }
             QPushButton#sectionPill:checked { background: #2563eb; color: #ffffff; border-color: #1d4ed8; }
             QPushButton#wakePet { background: #ffffff; color: #172b3a; border: 1px solid #8fa5b4; border-radius: 4px; padding: 4px 7px; }
@@ -62,7 +62,9 @@ class ChatPanel(QWidget):
         top_bar = QHBoxLayout()
         header_title = QLabel("🌱 션 데스크탑 비서", self)
         header_title.setObjectName("hubHeaderTitle")
-        top_bar.addWidget(header_title)
+        # The window title bar already names the hub; an in-body copy only
+        # got squeezed by the controls, so it stays hidden to save height.
+        header_title.hide()
         top_bar.addStretch()
 
         # Font size combo
@@ -98,7 +100,8 @@ class ChatPanel(QWidget):
         layout.addLayout(top_bar)
 
         # 2. Section pill buttons row
-        pill_bar = QHBoxLayout()
+        # Two per line: four labels side by side were cut off at normal widths.
+        pill_bar = QGridLayout()
         pill_bar.setSpacing(6)
         self.section_buttons: dict[str, QPushButton] = {}
         self.button_group = QButtonGroup(self)
@@ -110,14 +113,14 @@ class ChatPanel(QWidget):
             ("bag", "🎒 할 일 · 메모"),
             ("prompt", "🛠️ AI 질문 다듬기"),
         ]
-        for key, title in sections:
+        for position, (key, title) in enumerate(sections):
             btn = QPushButton(title, self)
             btn.setObjectName("sectionPill")
             btn.setCheckable(True)
             btn.clicked.connect(lambda _, k=key: self.open_section(k))
             self.section_buttons[key] = btn
             self.button_group.addButton(btn)
-            pill_bar.addWidget(btn)
+            pill_bar.addWidget(btn, position // 2, position % 2)
         layout.addLayout(pill_bar)
 
         # 3. Sleep notice row

@@ -206,7 +206,6 @@ def setup_chat_ui(widget) -> None:
     in_row.addStretch()
     in_row.addWidget(widget.template)
     in_row.addWidget(widget.library)
-    in_row.addWidget(widget.flow)
     in_row.addWidget(widget.reset)
     layout.addLayout(in_row)
     layout.addWidget(widget.input)
@@ -216,6 +215,7 @@ def setup_chat_ui(widget) -> None:
     send_row.addWidget(widget.retry_other)
     send_row.addWidget(widget.tools_toggle)
     send_row.addStretch()
+    send_row.addWidget(widget.flow)
     send_row.addWidget(widget.send)
     layout.addLayout(send_row)
 
@@ -246,7 +246,7 @@ def setup_chat_ui(widget) -> None:
     widget.copy.setFixedWidth(max(copy_w, widget.copy.sizeHint().width()))
     widget._reset_copy()
     controls = (widget.history_toggle, widget.provider, widget.ai_settings, widget.task, widget.detail,
-                widget.template, widget.library, widget.flow, widget.reset, widget.input, widget.send,
+                widget.template, widget.library, widget.reset, widget.input, widget.send, widget.flow,
                 widget.retry_other, widget.tools_toggle, widget.clarify, widget.compare, widget.diff,
                 widget.result_choice, widget.copy, widget.result,
                 widget.fill_toggle, widget.status)
