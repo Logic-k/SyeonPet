@@ -393,13 +393,13 @@ _TYPES = [
         "id": "counsel_reply", "label": "상담 회신",
         "role": "학부모 상담 회신 작성 전문가", "doc": "상담 회신",
         "sections": 4, "topics": _counsel_topics,
-        "signals": r"상담.{0,12}(신청|회신|답변|문자|연락|안내)|상담\s*(?:일정|시간|신청)",
+        "signals": r"상담.{0,12}(신청|회신|답변|문자|연락|안내|답장|답신)|상담\s*(?:일정|시간|신청|답장|답신)",
     },
     {
         "id": "complaint_reply", "label": "민원 회신",
         "role": "민원·항의 회신 문서 작성 전문가", "doc": "민원 회신",
         "sections": 4, "topics": _complaint_topics,
-        "signals": r"민원인|민원.{0,10}(회신|답변|공문|대응)|항의|불만|클레임|진정|청구",
+        "signals": r"민원인|민원.{0,10}(회신|답변|공문|대응|답장|답신)|항의|불만|클레임|진정|청구",
     },
     {
         "id": "official_reply", "label": "공문 답변",
@@ -431,13 +431,13 @@ _TYPES = [
         "id": "event_notice", "label": "행사 안내",
         "role": "학교·지역 행사 안내문 작성 전문가", "doc": "행사 안내문",
         "sections": 5, "topics": _event_topics,
-        "signals": r"행사|체육대회|현장체험|현장학습|졸업식|입학식|축제|발표회",
+        "signals": r"행사|체육대회|현장체험|현장학습|졸업식|입학식|축제|발표회|총회|설명회|학예회",
     },
     {
         "id": "notice_letter", "label": "학교 안내문",
         "role": "학교 안내·통신문 작성 전문가", "doc": "가정통신문·안내문",
         "sections": 5, "topics": _notice_topics,
-        "signals": r"가정통신문|통신문|알림장|방과후|안내문|안내장|공지|통지|newsletter|notice",
+        "signals": r"가정통신문|통신문|알림장|방과후|안내문|안내장|안내\s*문자|공지|통지|newsletter|notice",
     },
 ]
 
@@ -629,6 +629,30 @@ def build_questions(type_id: str, text: str) -> list[dict]:
 
 def _answered_count(ex: dict) -> int:
     return sum(1 for key in ("audience", "tone", "length", "when", "medium") if ex.get(key))
+
+
+def _completion_text(answered: int, total: int) -> str:
+    """Result-page completeness label: honest about skipped questions."""
+    if total <= 0 or answered >= total:
+        return "완성도 100%"
+    return f"답변 {answered}/{total} · 일부 미답변"
+
+
+def _is_local(profile) -> bool:
+    return profile is not None and profile.provider == "ollama"
+
+
+def _ai_confirm_title(profile) -> str:
+    return "로컬 AI 처리 확인" if _is_local(profile) else "외부 AI 전송 확인"
+
+
+def _service_label(provider, profile) -> str:
+    """User-facing destination name — never the raw provider id."""
+    if profile is not None:
+        loc = "로컬" if _is_local(profile) else "외부"
+        return f"{profile.provider} / {profile.model} ({loc})"
+    from syeonpet.chat.executor import destination_label
+    return destination_label(provider)
 
 
 def diagnose(text: str, type_id: str | None = None) -> dict:
@@ -1188,7 +1212,8 @@ class _QuestionCard(QFrame):
             row.addWidget(hint)
             row.addStretch()
             layout.addLayout(row)
-            chips_row = QHBoxLayout()
+            from syeonpet.chat.dialogs import _ActionRow
+            chips_row = _ActionRow()
             chips_row.setSpacing(4)
             self.chip_buttons = []
             for chip in question["chips"]:
@@ -1480,7 +1505,7 @@ class FlowDialog(QDialog):
         self.back_button.clicked.connect(self._back)
         self.back_button.hide()
         head.addWidget(self.back_button)
-        self.complete_label = QLabel("완성도 100%")
+        self.complete_label = QLabel("")  # filled by _render_record from real answers
         self.complete_label.setStyleSheet("font-weight:600;color:#2f6b3a;")
         head.addWidget(self.complete_label)
         layout.addLayout(head)
@@ -1732,7 +1757,8 @@ class FlowDialog(QDialog):
                 layout.addLayout(row)
                 self._tuner_widgets.append(("slider", axis["id"], slider, axis["steps"]))
             else:
-                row = QHBoxLayout()
+                from syeonpet.chat.dialogs import _ActionRow
+                row = _ActionRow()
                 buttons = []
                 for option in axis["options"]:
                     button = QPushButton(option)
@@ -1751,7 +1777,8 @@ class FlowDialog(QDialog):
         tone_title = QLabel("말투 조절")
         tone_title.setStyleSheet("font-weight:600;")
         tone_layout.addWidget(tone_title)
-        tone_row = QHBoxLayout()
+        from syeonpet.chat.dialogs import _ActionRow
+        tone_row = _ActionRow()
         tone_buttons = []
         for label in _TONE_CHIPS:
             button = QPushButton(label)
@@ -1845,6 +1872,8 @@ class FlowDialog(QDialog):
             "saved_text": None,
         })
         rec["text"] = prompt
+        rec["answered"] = sum(1 for card in self._cards if card.value())
+        rec["total"] = len(self._cards)
 
     def _sync_result_record(self):
         """Carry the on-screen edits back into the record being viewed."""
@@ -1869,6 +1898,12 @@ class FlowDialog(QDialog):
             self.result_type_label.setText(
                 f"'{rec['label']}' 형식으로 만든 결과예요 — "
                 "복사하거나 보관함에 저장할 수 있어요")
+        answered = rec.get("answered", 0)
+        total = rec.get("total", 0)
+        self.complete_label.setText(_completion_text(answered, total))
+        self.complete_label.setStyleSheet(
+            "font-weight:600;color:#2f6b3a;" if total <= 0 or answered >= total
+            else "font-weight:600;color:#8a6d1a;")
         provider, _profile = self._provider_getter()
         # AI 다듬기는 진행 중인 단계의 맥락만 쓰므로 완료 결과 열람 중에는 잠근다.
         self.refine_input.setEnabled(current)
@@ -2162,23 +2197,45 @@ class FlowDialog(QDialog):
         if provider == "offline" or self._busy_ai:
             return
         existing = [q["title"] for q in self._diag["questions"]]
-        if profile is not None and profile.provider == "ollama":
-            title = "로컬 AI 처리 확인"
-            detail = (f"원래 요청, 현재 진단 정보와 이미 묻는 질문 목록을 이 기기의 "
-                      f"{profile.provider} / {profile.model} 로컬 서버에서 처리합니다.\n\n진행하시겠어요?")
-        else:
-            title = "외부 AI 전송 확인"
-            detail = (f"원래 요청, 현재 진단 정보와 이미 묻는 질문 목록을 {provider}에 전송합니다. "
-                      "제공자는 내용을 저장하거나 서비스 개선에 사용할 수 있습니다.\n\n전송하시겠어요?")
-        box = QMessageBox(QMessageBox.Icon.Question, title, detail,
+        detail_text = (f"원래 요청:\n{self._last_original}\n\n"
+                       f"작업 유형: {self._diag['label']}\n\n"
+                       f"이미 묻는 질문:\n" + ("\n".join(existing) if existing else "(없음)"))
+        self._ai_confirm(
+            provider, profile,
+            "원래 요청, 현재 진단 정보와 이미 묻는 질문 목록을",
+            detail_text,
+            lambda: self._ai_questions_confirmed(provider, profile, existing))
+
+    def _ai_confirm(self, provider, profile, sends, detail_text, callback):
+        """Shared-wording consent box built on this module's QMessageBox.
+
+        Construction stays on the module-level name so tests can patch it;
+        the text, notices and button labels come from the shared helper.
+        """
+        from syeonpet.chat.dialogs import send_confirm_text
+        local = _is_local(profile)
+        service = _service_label(provider, profile)
+        box = QMessageBox(QMessageBox.Icon.Question, _ai_confirm_title(profile),
+                          send_confirm_text(provider, service, sends, local=local),
                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
         box.setDefaultButton(QMessageBox.StandardButton.No)
-        box.finished.connect(lambda value: self._ai_questions_confirmed(value, provider, profile, existing))
+        box.finished.connect(
+            lambda value: callback() if value == QMessageBox.StandardButton.Yes else None)
+        if hasattr(box, "setTextFormat"):  # real QMessageBox; the test stub stops here
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            box.setDetailedText(detail_text)
+            box.finished.connect(lambda _v: box.setDetailedText(""))
+            yes = box.button(QMessageBox.StandardButton.Yes)
+            if yes is not None:
+                yes.setText("처리 시작" if local else f"{service}로 전송")
+            cancel = box.button(QMessageBox.StandardButton.No)
+            if cancel is not None:
+                cancel.setText("취소")
+                cancel.setFocus()
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         box.open()
 
-    def _ai_questions_confirmed(self, value, provider, profile, existing):
-        if value != QMessageBox.StandardButton.Yes:
-            return
+    def _ai_questions_confirmed(self, provider, profile, existing):
         self.ai_question_status.setText("AI가 보완 질문을 만드는 중…")
         self.ai_question_status.show()
 
@@ -2207,23 +2264,15 @@ class FlowDialog(QDialog):
         if not instruction:
             self.result_status.setText("다듬기 방법을 한 줄로 적어 주세요.")
             return
-        if profile is not None and profile.provider == "ollama":
-            title = "로컬 AI 처리 확인"
-            detail = (f"완성형 프롬프트와 다듬기 지시를 이 기기의 "
-                      f"{profile.provider} / {profile.model} 로컬 서버에서 처리합니다.\n\n진행하시겠어요?")
-        else:
-            title = "외부 AI 전송 확인"
-            detail = (f"완성형 프롬프트와 다듬기 지시를 {provider}에 전송합니다. "
-                      "제공자는 내용을 저장하거나 서비스 개선에 사용할 수 있습니다.\n\n전송하시겠어요?")
-        box = QMessageBox(QMessageBox.Icon.Question, title, detail,
-                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
-        box.setDefaultButton(QMessageBox.StandardButton.No)
-        box.finished.connect(lambda value: self._refine_confirmed(value, provider, profile, instruction))
-        box.open()
+        detail_text = (f"완성형 프롬프트:\n{self.result_edit.toPlainText()}\n\n"
+                       f"다듬기 지시:\n{instruction}")
+        self._ai_confirm(
+            provider, profile,
+            "완성형 프롬프트와 다듬기 지시를",
+            detail_text,
+            lambda: self._refine_confirmed(provider, profile, instruction))
 
-    def _refine_confirmed(self, value, provider, profile, instruction):
-        if value != QMessageBox.StandardButton.Yes:
-            return
+    def _refine_confirmed(self, provider, profile, instruction):
         previous = self.result_edit.toPlainText()
         context = "\n".join(f"{card.question['title']}: {card.value()}"
                             for card in self._cards if card.value())

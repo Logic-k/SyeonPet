@@ -178,6 +178,12 @@ def present_update_result(result: dict, tray: QSystemTrayIcon, dialogs: list) ->
                           result.get("message", "새 버전이 있습니다.") + "\n공식 GitHub 릴리스 페이지를 열까요?",
                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         box.setDefaultButton(QMessageBox.StandardButton.No)
+        yes_btn = box.button(QMessageBox.StandardButton.Yes)
+        if yes_btn is not None:
+            yes_btn.setText("열기")
+        no_btn = box.button(QMessageBox.StandardButton.No)
+        if no_btn is not None:
+            no_btn.setText("취소")
         box.finished.connect(lambda val: QDesktopServices.openUrl(release_url) if val == QMessageBox.StandardButton.Yes else None)
     else:
         box = QMessageBox(QMessageBox.Icon.Information, "션 업데이트 확인",

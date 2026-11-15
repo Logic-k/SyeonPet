@@ -59,6 +59,7 @@ class FileCardWidget(QFrame):
         top_row.addWidget(badge)
         name_lbl = QLabel(item.get("name", ""))
         name_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b;")
+        name_lbl.setWordWrap(True)
         top_row.addWidget(name_lbl, stretch=1)
         mtime = item.get("mtime", 0)
         top_row.addWidget(QLabel(datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else ""))
@@ -73,7 +74,9 @@ class FileCardWidget(QFrame):
                    else "📥 다운로드 폴더" if ("downloads" in loc_low or "다운로드" in loc)
                    else "📁 내 문서" if ("documents" in loc_low or "문서" in loc)
                    else f"📁 {loc}")
-        meta_row.addWidget(QLabel(loc_str))
+        loc_lbl = QLabel(loc_str)
+        loc_lbl.setWordWrap(True)
+        meta_row.addWidget(loc_lbl)
         if item.get("badge"):
             meta_row.addWidget(QLabel(f"[{item['badge']}]"))
         if item.get("older_versions"):
@@ -88,8 +91,9 @@ class FileCardWidget(QFrame):
             snip.setWordWrap(True)
             lay.addWidget(snip)
 
-        # Action Buttons
-        btn_row = QHBoxLayout()
+        # Action Buttons (wrap to a second row at narrow widths)
+        from syeonpet.chat.dialogs import _ActionRow
+        btn_row = _ActionRow()
         is_danger = item.get("is_dangerous", False)
         open_btn = QPushButton("⚠️ 실행 파일 차단" if is_danger else "📄 바로 열기")
         open_btn.setEnabled(not is_danger)
@@ -150,6 +154,8 @@ class FileFinderWidget(QWidget):
         super().__init__(parent)
         self.index = index
         self._worker: _IndexWorker | None = None
+        self._queued_roots = None
+        self._queued_cache = None
         self._index_requested = False
         self._filter_exts: set[str] | None = None
         self._filter_min_mtime = None
@@ -217,6 +223,13 @@ class FileFinderWidget(QWidget):
 
     def start_async_indexing(self, roots=None, cache_path=None) -> None:
         if self._worker is not None and self._worker.isRunning():
+            # A scan is in flight — remember the request instead of dropping it,
+            # so a folder added mid-index is still scanned when this run ends.
+            self._queued_roots = self._merged_roots(roots)
+            self._queued_cache = cache_path
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.setText("📂 문서 확인이 끝나는 대로 이어서 확인할게요...")
+                self.status_lbl.show()
             return
         if hasattr(self, "status_lbl"):
             self.status_lbl.setText("📂 문서를 확인하고 있어요...")
@@ -226,6 +239,16 @@ class FileFinderWidget(QWidget):
         self._worker.start()
 
     def _on_indexing_finished(self, idx: FileIndex | None) -> None:
+        queued_roots, queued_cache = self._queued_roots, self._queued_cache
+        self._queued_roots = self._queued_cache = None
+        if queued_roots is not None:
+            # Run the queued scan with the freshest roots (e.g. folder added
+            # or refresh requested while the previous index was still running).
+            if idx is not None:
+                self.index = idx
+            self._worker = None
+            self.start_async_indexing(roots=queued_roots, cache_path=queued_cache)
+            return
         if idx is not None:
             self.index = idx
             if hasattr(self, "status_lbl"):
@@ -264,6 +287,7 @@ class FileFinderWidget(QWidget):
         title_box.addWidget(QLabel("📂 션이 파일 탐정 · 폴더 지옥 탈출"))
         sub = QLabel("파일 이름이 기억나지 않아도 괜찮아요! '어제 카톡 엑셀', 'ㅇㅅㅇㄴ', 문서 안의 단어로 찾아보세요.")
         sub.setStyleSheet("font-size: 12px; color: #64748b;")
+        sub.setWordWrap(True)
         title_box.addWidget(sub)
         lay.addLayout(title_box)
 
@@ -280,20 +304,13 @@ class FileFinderWidget(QWidget):
         btn_find.setStyleSheet("background: #2563eb; color: #fff; font-weight: bold; padding: 7px 14px; border-radius: 6px;")
         btn_find.clicked.connect(self._on_search)
         s_row.addWidget(btn_find)
-
-        btn_add = QPushButton("📂+ 내 업무 폴더 추가")
-        btn_add.setStyleSheet("background: #f1f5f9; color: #334155; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 6px;")
-        btn_add.clicked.connect(self._on_add_folder)
-        s_row.addWidget(btn_add)
-
-        btn_ref = QPushButton("🔄 새로고침")
-        btn_ref.setStyleSheet("background: #f1f5f9; color: #334155; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 6px;")
-        btn_ref.clicked.connect(self._on_refresh)
-        s_row.addWidget(btn_ref)
         lay.addLayout(s_row)
 
-        # Filters Row
-        f_row = QHBoxLayout()
+        # Filters Row — chips wrap to extra lines at narrow widths, and the
+        # folder/refresh actions live here so the search field keeps its width.
+        from syeonpet.chat.dialogs import _ActionRow
+        f_row = _ActionRow()
+        f_row.setSpacing(4)
         f_row.addWidget(QLabel("기간:"))
         self.time_grp = QButtonGroup(self)
         for i, (lbl, sec) in enumerate([("전체", None), ("오늘·어제", 2 * 86400), ("이번 주", 7 * 86400), ("이번 달", 30 * 86400)]):
@@ -306,7 +323,7 @@ class FileFinderWidget(QWidget):
             self.time_grp.addButton(b, i)
             f_row.addWidget(b)
 
-        f_row.addSpacing(10)
+        f_row.addWidget(self._chip_gap())
         f_row.addWidget(QLabel("종류:"))
         self.type_grp = QButtonGroup(self)
         type_chips = [
@@ -327,7 +344,17 @@ class FileFinderWidget(QWidget):
             b.clicked.connect(lambda _, e=exts: self._on_type_chip(e))
             self.type_grp.addButton(b, i)
             f_row.addWidget(b)
-        f_row.addStretch()
+
+        f_row.addWidget(self._chip_gap())
+        btn_add = QPushButton("📂+ 내 업무 폴더 추가")
+        btn_add.setStyleSheet("background: #f1f5f9; color: #334155; padding: 4px 10px; border: 1px solid #cbd5e1; border-radius: 6px;")
+        btn_add.clicked.connect(self._on_add_folder)
+        f_row.addWidget(btn_add)
+
+        btn_ref = QPushButton("🔄 새로고침")
+        btn_ref.setStyleSheet("background: #f1f5f9; color: #334155; padding: 4px 10px; border: 1px solid #cbd5e1; border-radius: 6px;")
+        btn_ref.clicked.connect(self._on_refresh)
+        f_row.addWidget(btn_ref)
         lay.addLayout(f_row)
 
         # Results area
@@ -356,7 +383,14 @@ class FileFinderWidget(QWidget):
         # Reassurance Footer
         foot = QLabel("🔒 안심하세요: 파일 찾기는 인터넷 없이 내 컴퓨터 안에서만 동작하며 외부로 전송되지 않습니다.")
         foot.setStyleSheet("font-size: 11px; color: #64748b; padding: 2px;")
+        foot.setWordWrap(True)
         lay.addWidget(foot)
+
+    @staticmethod
+    def _chip_gap(width: int = 8) -> QWidget:
+        gap = QWidget()
+        gap.setFixedWidth(width)
+        return gap
 
     def _chip_style(self) -> str:
         return "QPushButton { background: #f1f5f9; color: #475569; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 2px 8px; } QPushButton:checked { background: #2563eb; color: #fff; font-weight: bold; border-color: #2563eb; }"

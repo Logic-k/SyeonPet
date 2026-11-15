@@ -2,6 +2,10 @@
 
 Provides direct Korean administrative and educational office deliverable generation,
 avoiding the meta-prompt trap. Novices receive complete, ready-to-copy drafts.
+
+Draft honesty rule: offline formatters only use facts actually present in the
+request. Anything that cannot be extracted is marked with "[확인 필요]" rather
+than being invented (no made-up dates, names, places or subjects).
 """
 from __future__ import annotations
 
@@ -26,10 +30,10 @@ INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
     ("table_summary", ["표로 정리", "표 정리", "건수 요약", "건을 표", "합계 적어", "집계 표"]),
     ("checklist", ["체크리스트", "점검표", "사전·당일·사후", "준비 체크리스트"]),
     ("official_doc", ["공문", "기안문", "시행문", "공문 초안"]),
-    ("sms_notice", ["문자", "sms", "알림톡", "안내 문자"]),
+    ("sms_notice", ["문자", "sms", "알림톡", "안내 문자", "안내문자", "알림 문자", "알림장"]),
     ("coop_email", ["메일", "이메일", "협조 이메일", "협조 메일"]),
     ("meeting_notes", ["회의", "회의록", "회의 메모", "회의 결과"]),
-    ("inquiry_reply", ["회신", "민원", "문의에 대한 답변", "회신 초안"]),
+    ("inquiry_reply", ["회신", "민원", "문의에 대한 답변", "회신 초안", "답장", "답신"]),
     ("polite_rewrite", ["공손", "정중", "다듬", "바꿔", "어조", "안 됩니다", "처리 안"]),
 ]
 
@@ -50,135 +54,358 @@ def _extract_term(prompt: str, pattern: str, default: str = "") -> str:
     return m.group(1) if m else default
 
 
+_NEED = "[확인 필요]"
+
+# Request verbs that end the "topic" part of a request
+# ("…안내 문자 써줘", "…협조 메일 부탁드립니다").
+_REQ_RE = re.compile(
+    r"만들어\s*주|만들어|작성해\s*주|작성해|작성|써\s*줘|써줘|써\s*주|써|"
+    r"보내\s*줘|보내줘|보내\s*주|보낼|보내|해\s*줘|해줘|해\s*주|부탁|주세요|주십시오|"
+    r"드려|드립|정리해\s*주|정리해|정리|뽑아|필요|알려\s*주|알려|하고\s*싶|줘"
+)
+# Format/genre/tone words that are not part of the topic itself.
+_FMT_RE = re.compile(
+    r"안내\s*문자|알림\s*문자|알림톡|문자|sms|메일|이메일|공문|기안문|시행문|회의록|"
+    r"회의\s*메모|체크리스트|점검표|보고서|안내문|안내장|가정통신문|통신문|초안|협조|"
+    r"답변|회신|답장|답신|문서|양식|서식|형식|표로|"
+    r"정중하게|공손하게|정중한|공손한|정중히|공손히|정중|공손|바로|즉시|빠른|간단한|간략한"
+)
+# Time/quantity/context words that describe conditions rather than the topic.
+_STOP_RE = re.compile(
+    r"내일|오늘|모레|글피|이번\s*주|다음\s*주|이번\s*달|다음\s*달|오전|오후|새벽|저녁|밤|"
+    r"\d+\s*월|\d+\s*일|\d+\s*시|\d+\s*분|\d+\s*명|\d+\s*곳|\d+\s*부|\d+\s*개|\d+\s*건|"
+    r"\d+\s*학년도|\d+\s*년|"
+    r"까지|부터|경|요일|마감|예정|미정|미확정|장소|대면|비대면|온라인|진행|실시|개최|대상|참석|준비|"
+    r"이라고|이라구|라고|이라는|라는|다고|라며|관련|대한|위한|때문|사전|당일|사후|"
+    r"학부모님|학부모|선생님|교직원|교사|학생|담당자|주무관"
+)
+# Department/recipient mentions that frame the request but are not the topic.
+_DEPT_RE = re.compile(
+    r"교무부에서|교무부로|행정실에서|행정실에|행정실로|교무실에서|교무실에|교무실로|"
+    r"교육지원청에서|교육지원청에|교육지원청으로|교육청에서|교육청에|교육청으로|"
+    r"각급학교에서|각급학교에|학교에서|학교에|학교로"
+)
+# Trailing particles cut from leftover tokens.
+_TRAIL_RE = re.compile(
+    r"(?:님들께|님께|께서|에게|한테|에서|으로|부터|까지|처럼|이랑|랑|밖에|조차|마저|"
+    r"이라고|라고|이라는|라는|다고|은|는|이|가|을|를|의|에|와|과|도|만|로)$"
+)
+# Tokens that never carry topic meaning on their own.
+_STOP_TOKENS = {
+    "각", "해당", "관련", "대한", "위한", "때문", "이", "가", "을", "를", "의", "에",
+    "도", "만", "로", "으로", "에서", "까지", "부터", "과", "와", "랑", "및", "등",
+    "께", "님",
+}
+
+
+def _strip_trail(token: str) -> str:
+    """Cut a trailing particle only when a usable stem (>=2 chars) remains."""
+    m = _TRAIL_RE.search(token)
+    if m and len(token[:m.start()]) >= 2:
+        return token[:m.start()]
+    return token
+
+
+def _extract_topic(prompt: str) -> str:
+    """Best-effort topic extraction that never invents content.
+
+    Takes the part of the request before the request verb, strips format
+    words, time/quantity words and department markers, then keeps the
+    remaining content words. Returns "" when nothing usable remains.
+    """
+    head = _REQ_RE.split(prompt, maxsplit=1)[0]
+    head = _FMT_RE.sub(" ", head)
+    head = _DEPT_RE.sub(" ", head)
+    head = _STOP_RE.sub(" ", head)
+    head = re.sub(r"[()（）\[\]{}<>,.:;·~!?\"'&/\\-]", " ", head)
+    tokens = []
+    for token in head.split():
+        token = _strip_trail(token)
+        if token and token not in _STOP_TOKENS:
+            tokens.append(token)
+    return " ".join(tokens).strip()
+
+
+_DEADLINE_PATTERNS = (
+    r"((?:내일|오늘|모레|이번\s*주|다음\s*주)\s*(?:오전|오후)?\s*\d+\s*시(?:\s*\d+\s*분)?\s*까지)",
+    r"(마감\s*\d+\s*월\s*\d+\s*일(?:\s*(?:오전|오후)?\s*\d+\s*시)?)",
+    r"((?:월|화|수|목|금|토|일)요일\s*(?:오전|오후)?\s*까지)",
+    r"(\d+\s*월\s*\d+\s*일\s*(?:(?:오전|오후)\s*\d+\s*시(?:\s*\d+\s*분)?)?)",
+    r"((?:오전|오후)\s*\d+\s*시(?:\s*\d+\s*분)?)",
+    r"(\d+\s*시\s*까지)",
+)
+
+
+def _extract_deadline(prompt: str) -> str:
+    for pattern in _DEADLINE_PATTERNS:
+        found = _extract_term(prompt, pattern)
+        if found:
+            return found.strip()
+    return ""
+
+
+_KNOWN_RECIPIENTS = (
+    ("행정실", "행정실 담당 주무관님"),
+    ("교무실", "교무실 담당 선생님"),
+    ("교육지원청", "교육지원청 담당자님"),
+    ("교육청", "교육청 담당자님"),
+    ("각급학교", "각급학교 담당자님"),
+    ("학부모", "학부모님"),
+    ("교직원", "교직원 선생님"),
+)
+
+
+def _extract_recipient(prompt: str) -> str:
+    for word, label in _KNOWN_RECIPIENTS:
+        if word in prompt:
+            return label
+    return ""
+
+
+_EVENT_PHRASES = (
+    "학부모 연수", "교직원 연수", "교원 연수", "학부모 총회", "학교설명회",
+    "학부모 상담회", "현장체험학습", "체육대회", "방과후학교",
+)
+_EVENT_WORDS = (
+    "총회", "설명회", "연수", "체육대회", "운동회", "졸업식", "입학식",
+    "발표회", "학예회", "축제", "상담회", "오픈스쿨", "등교맞이",
+)
+
+
+def _extract_event(prompt: str) -> str:
+    for phrase in _EVENT_PHRASES:
+        if phrase in prompt:
+            return phrase
+    topic = _extract_topic(prompt)
+    if topic:
+        return topic
+    for word in _EVENT_WORDS:
+        if word in prompt:
+            return word
+    return ""
+
+
+def _meeting_body(prompt: str) -> str:
+    """Extract pasted meeting content: text after ':' or after the first line."""
+    if ":" in prompt or "：" in prompt:
+        body = re.split(r"[:：]", prompt, maxsplit=1)[1].strip()
+        if len(body) >= 10:
+            return body
+    lines = [ln.strip() for ln in prompt.splitlines() if ln.strip()]
+    if len(lines) >= 2:
+        rest = "\n".join(lines[1:]).strip()
+        if len(rest) >= 10:
+            return rest
+    return ""
+
+
 def _format_sms(prompt: str) -> str:
-    time_str = _extract_term(prompt, r"(내일\s*(?:오전|오후)?\s*\d+시(?:까지)?)", "안내된 시간")
-    if not time_str:
-        time_str = _extract_term(prompt, r"(\d+시(?:까지)?)", "마감 시간")
-    subject = "방과후학교" if "방과후학교" in prompt else "신청"
+    time_str = _extract_deadline(prompt) or f"{_NEED}: 일시·마감 시간"
+    topic = _extract_topic(prompt) or f"{_NEED}: 안내할 내용"
+    if re.search(r"마감|신청|제출|접수|모집", prompt):
+        body_lines = (
+            f"{topic} 관련하여 안내드립니다.\n"
+            f"마감 일시: {time_str}\n"
+            "마감 시간 이후에는 접수가 어려울 수 있으니, 일정을 꼭 확인해 주시기 바랍니다."
+        )
+    else:
+        body_lines = (
+            f"{topic} 관련하여 안내드립니다.\n"
+            f"일시: {time_str}\n"
+            f"장소: {_NEED}\n"
+            f"준비물·기타 사항: {_NEED}"
+        )
     return f"""[안내 문자 초안]
 
 안녕하십니까, 학부모님.
 항상 학교 교육활동에 따뜻한 관심과 성원을 보내주셔서 감사드립니다.
 
-안내해 드린 바와 같이, {subject} 신청 마감 시각은 {time_str}입니다.
-참여를 희망하시는 학부모님께서는 마감 시간(오후 4시) 전까지 신청을 완료해 주시기 바랍니다.
+{body_lines}
 
-마감 시간 이후에는 신청이 어려울 수 있으니 일정을 꼭 확인해 주시기 바라며,
 궁금하신 점이 있으시면 언제든지 학교로 문의해 주십시오. 감사합니다.
 
-[발신: 학교 교육활동 담당 부서]"""
+[발신: 학교 담당 부서]"""
 
 
 def _format_email(prompt: str) -> str:
-    dept = "행정실" if "행정실" in prompt else "관련 부서"
-    deadline = "금요일 오전" if "금요일" in prompt and "오전" in prompt else "지정 기한"
-    topic = "냉난방" if "냉난방" in prompt else "시설 점검"
+    recipient = _extract_recipient(prompt)
+    salutation = recipient or "담당자님"
+    recipient_disp = recipient or f"{_NEED}: 수신 부서·담당자"
+    deadline = _extract_deadline(prompt) or f"{_NEED}: 요청 기한"
+    topic = _extract_topic(prompt) or f"{_NEED}: 협조할 내용"
     return f"""[업무 협조 메일 초안]
 
-제목: [협조 요청] 연수 장소 {topic} 사전 점검 및 확인 협조 요청의 건
-수신: {dept} 담당 주무관님
-발신: 연수 담당자
+제목: {topic} 관련 협조 요청의 건
+수신: {recipient_disp}
+발신: {_NEED}: 발신 부서·담당자
 
-안녕하십니까, {dept} 주무관님.
-원활한 학사 운영과 지원 업무에 늘 애써주심에 깊이 감사드립니다.
+안녕하십니까, {salutation}.
+원활한 업무 추진에 늘 애써주심에 감사드립니다.
 
-다름이 아니오라, 예정된 교직원 연수의 원활하고 쾌적한 진행을 위해 연수 장소의 {topic} 시설 가동 상태 확인을 부탁드리고자 합니다.
+다름이 아니오라, {topic} 관련하여 아래와 같이 협조를 요청드리고자 합니다.
 
-연수 준비 일정상 {deadline}까지 작동 여부를 점검해 주시면 준비에 큰 도움이 되겠습니다.
+- 협조 내용: {topic}
+- 요청 기한: {deadline}
+- 문의: {_NEED}: 담당자 연락처
 
-바쁘신 업무 중에 번거로운 부탁을 드려 송구하오며, 관련하여 변동 사항이나 확인이 필요하신 부분은 언제든 연락 주시기 바랍니다.
+바쁘신 업무 중에 번거로운 부탁을 드려 송구하며, 확인이 필요하신 부분은 언제든 연락 주시기 바랍니다.
 감사합니다."""
 
 
 def _format_official_doc(prompt: str) -> str:
-    schools = _extract_term(prompt, r"(초등학교\s*\d+곳|\d+곳)", "초등학교 4곳")
-    date_term = _extract_term(prompt, r"(\d+월\s*\d+일)", "11월 18일")
-    subject = "기초학력" if "기초학력" in prompt else "교원 역량 강화"
-    deadline = _extract_term(prompt, r"마감\s*(\d+월\s*\d+일)", "11월 10일")
+    dates = re.findall(r"\d+\s*월\s*\d+\s*일", prompt)
+    deadline = _extract_term(prompt, r"마감\s*(\d+\s*월\s*\d+\s*일)")
+    date_term = next((d for d in dates if d != deadline), "")
+    schools = _extract_term(prompt, r"((?:초등|중등|고등)?학교\s*\d+\s*곳|\d+\s*곳)")
+    topic = _extract_topic(prompt) or f"{_NEED}: 안내할 사업·행사"
+    if _NEED in topic or topic.endswith(" 안내"):
+        title = topic
+    else:
+        title = f"{topic} 안내"
+    if "관내" in prompt or "학교장" in prompt:
+        recipient = "관내 각급학교장"
+    elif "교육지원청" in prompt or "교육청" in prompt:
+        recipient = "교육지원청"
+    else:
+        recipient = f"{_NEED}: 수신 기관"
+    if schools:
+        target = f"관내 {schools} 소속 교사"
+    elif "교사" in prompt or "교직원" in prompt:
+        target = f"{_NEED}: 대상 학교·소속 교사"
+    else:
+        target = f"{_NEED}: 대상"
+    if re.search(r"장소\s*(?:미정|미확정)", prompt):
+        place = "미정 (추후 별도 안내 예정)"
+    else:
+        place = _extract_term(prompt, r"(강당|체육관|운동장|회의실|시청각실|교실|온라인)\S*") \
+            or f"{_NEED}: 장소"
     return f"""[공문 기안문 초안]
 
-수신자: 관내 초등학교장
+수신자: {recipient}
 (경유)
-제  목: 2026학년도 {schools} 교사 대상 {subject} 연수 안내
+제  목: {title}
 
-1. 관련: 2026학년도 {subject} 보장 및 학습 지원 계획
-2. 관내 {schools} 교사를 대상으로 {subject} 지도 역량 강화를 위한 연수를 다음과 같이 운영하오니, 해당 교원이 참석할 수 있도록 협조하여 주시기 바랍니다.
+1. 관련·목적: {_NEED}: 관련 지침·계획 등 근거
+2. 아래와 같이 {topic}을(를) 진행하고자 하오니 협조하여 주시기 바랍니다.
 
-  가. 연수명: 2026 초등학교 교사 {subject} 맞춤형 연수
-  나. 일시: 2026년 {date_term}
-  다. 대상: 관내 대상 {schools} 소속 교사
-  라. 장소: 미정 (※ 연수 대상자 확정 후 추후 별도 안내 예정)
-  마. 신청 마감: {deadline} 17:00까지
-  바. 신청 방법: 업무관리시스템 자료집계 또는 참가 신청서 제출
+  가. 일시: {date_term or f'{_NEED}: 일시'}
+  나. 대상: {target}
+  다. 장소: {place}
+  라. 내용: {_NEED}: 세부 내용
+  마. 제출·신청 마감: {deadline or f'{_NEED}: 마감일'}
+  바. 방법: {_NEED}: 신청·제출 방법
 
-붙임  1. 2026 {subject} 연수 운영 계획서 1부.
-      2. 참가 신청서 서식 1부.  끝."""
+붙임  {_NEED}: 붙임 문서명 1부.  끝."""
 
 
 def _format_meeting_notes(prompt: str) -> str:
-    m_date = _extract_term(prompt, r"(\d+월\s*\d+일)", "10월 30일")
+    date = _extract_term(prompt, r"(\d+\s*월\s*\d+\s*일)") or f"{_NEED}: 회의 일시"
+    body = _meeting_body(prompt)
+    if not body:
+        return """[회의록·회의 결과 정리]
+
+정리할 회의 내용이 확인되지 않았습니다.
+아래처럼 회의 메모·녹취·속기 내용을 함께 붙여 넣어 주시면
+일시·안건·주요 내용·결정 사항·후속 조치로 정리해 드립니다.
+
+  예) "11월 20일 회의 메모: 안건 — …, 결정 — …, 담당 — …"
+
+(참고용 빈 양식)
+
+■ 회의 일시:
+■ 회의 장소:
+■ 참석자:
+■ 안건:
+■ 주요 내용:
+■ 결정 사항:
+■ 후속 조치 (담당/기한/내용):"""
+
+    items = [s.strip(" ,.") for s in re.split(r"[,，;；\n]|·", body) if s.strip()]
+    lines = "\n".join(f" {idx}. {s}" for idx, s in enumerate(items, 1))
     return f"""[회의 결과 정리 및 후속 조치]
 
-■ 회의 일시: {m_date} 회의
-■ 회의 안건: 교원 연수 추진 현황 및 제반 준비 점검
+■ 회의 일시: {date}
+■ 회의 장소: {_NEED}
+■ 참석자: {_NEED}
+■ 회의 안건: {_NEED}
 
-■ 주요 진행 상황 요약
- 1. [완료] 연수 강사 섭외 완료
- 2. [미확정/보류] 다과 예산 미확정 (※ 추가 예산 배정 여부 확인 후 집행 계획 수립)
- 3. [예정/후속 조치] 안내장 발송 일정 확정
+■ 주요 내용 (붙여 넣은 내용 정리)
+{lines}
 
-■ 업무 분장 및 액션 플랜 (Action Items)
- 1. 담당자: 김주무관
- 2. 기한: 이번 주 금요일까지
- 3. 담당 내용: 관내 학교 및 대상자 대상 연수 안내장 기안 및 발송 완료"""
+■ 결정 사항
+ 1. {_NEED}: 회의에서 결정된 사항
+
+■ 후속 조치 (Action Items)
+ 1. 담당: {_NEED} / 기한: {_NEED} / 내용: {_NEED}
+"""
 
 
 def _format_inquiry_reply(prompt: str) -> str:
-    count_term = _extract_term(prompt, r"(학교\s*\d+곳|\d+곳)", "학교 2곳")
-    date_term = _extract_term(prompt, r"(\d+월\s*\d+일)", "12월 1일")
+    count = _extract_term(prompt, r"(학교\s*\d+\s*곳|기관\s*\d+\s*곳|\d+\s*곳)") \
+        or f"{_NEED}: 문의 기관"
+    date = _extract_term(prompt, r"(\d+\s*월\s*\d+\s*일)")
+    m = re.search(r"(\S+(?:\s*\S+){0,3}?)(?:을|를)?\s*문의", prompt)
+    matter = ""
+    if m:
+        matter = _STOP_RE.sub(" ", m.group(1)).strip()
+        matter = _strip_trail(matter).strip()
+    matter = matter or _extract_topic(prompt) or "문의하신 사항"
+    date_txt = f"{date} " if date else ""
+    if "미확정" in prompt or "미정" in prompt:
+        answer = ("해당 사항은 현재 일정 미확정 상태입니다.\n"
+                  "세부 추진 계획이 확정되는 즉시 공문 및 유선으로 재안내해 드리겠습니다.")
+    else:
+        answer = f"{_NEED}: 문의에 대한 답변 내용"
     return f"""[문의 회신 초안]
 
-수신: 문의 학교 업무 담당 선생님 ({count_term})
-발신: 교육지원청 담당자
+수신: 문의 기관 담당자님 ({count})
+발신: {_NEED}: 발신 기관·담당자
 
-안녕하십니까, 학교 교육활동에 늘 노고가 많으십니다.
-교육지원청 업무 담당자입니다.
+안녕하십니까, {count} 업무 담당자님.
+문의해 주신 {date_txt}{matter}에 대하여 회신드립니다.
 
-문의해 주신 {date_term} 점검 일정에 대하여 회신드립니다.
+{answer}
 
-해당 점검 일정은 교육청 내 세부 운영 계획 조율 중으로 현재 일정 미확정 상태입니다.
-세부 추진 계획 및 점검 일정이 확정되는 즉시 문의 주신 {count_term}을 포함하여 공문 및 유선으로 신속히 재안내해 드리겠습니다.
-
-학사 일정 수립에 불편을 드리지 않도록 일정이 확정되는 대로 빠르게 공유하겠습니다.
+학사 일정 수립에 불편을 드리지 않도록 빠르게 안내해 드리겠습니다.
 궁금하신 점이 있으시면 언제든지 담당자에게 연락 주시기 바랍니다. 감사합니다."""
 
 
 def _format_checklist(prompt: str) -> str:
-    headcount = _extract_term(prompt, r"(\d+명)", "40명")
+    headcount = _extract_term(prompt, r"(\d+\s*명)")
+    copies = f"{headcount}부" if headcount else "참석 인원 수만큼"
+    scale = headcount or "예상 인원"
+    scale_txt = headcount or _NEED
+    event = _extract_event(prompt) or f"{_NEED}: 행사명"
+    if "대면" in prompt:
+        mode = ", 대면 진행"
+    elif "온라인" in prompt or "비대면" in prompt:
+        mode = ", 온라인·비대면 진행"
+    else:
+        mode = ""
     return f"""[행사·업무 준비 체크리스트]
 
-■ 행사명: 학부모 연수 (대면 진행, 참석 인원 {headcount} 기준)
+■ 행사명: {event} (참석 인원: {scale_txt}{mode})
 
 ■ 1. 사전 준비 (행사 3일 전 ~ 전일)
- □ 참석 대상 학부모 명단 확인 (총 {headcount} 등록 및 참석 여부 최종 파악)
- □ 행사장(강당/시청각실) 대관 및 좌석 배치 ({headcount} 규모 책상·의자 세팅)
+ □ 참석 대상자 명단 확인 (총 {scale} 등록 및 참석 여부 최종 파악)
+ □ 행사장(강당/시청각실) 대관 및 좌석 배치 ({scale} 규모)
  □ 음향(마이크), 빔프로젝터, 노트북, 프리젠터 작동 상태 사전 점검
- □ 연수 교재 및 유인물 {headcount}부 인쇄 및 제본 준비
+ □ 교재·유인물 {copies} 인쇄 및 제본 준비
  □ 다과, 생수, 명찰, 필기도구 준비
- □ 참석자 대상 사전 안내 문자(일시, 장소, 주차) 발송
+ □ 참석자 대상 사전 안내(일시, 장소, 주차) 발송
 
 ■ 2. 당일 운영 (행사 시작 전 ~ 진행)
  □ 행사장 입구 등록대 설치 (출석부 서명, 교재 및 다과 배부)
  □ 강사 영접 및 발표 자료(PPT) 사전 로딩 확인
  □ 냉난방 및 실내 환기 점검
- □ 행사 진행 안내, 국민의례 및 강사 소개
- □ 연수 진행 중 사진 촬영 및 질의응답 지원
+ □ 행사 진행 안내, 개회 및 강사 소개
+ □ 진행 중 사진 촬영 및 질의응답 지원
 
 ■ 3. 사후 정리 (행사 종료 후)
- □ 참석자 만족도 설문지 수합 및 통계 정리
+ □ 참석자 만족도 설문 수합 및 통계 정리
  □ 행사장 정리정돈 및 대여 기자재 원상복구
  □ 강사료 지급 품의 및 정산 (원천징수 확인, 계좌 입금 의뢰)
- □ 연수 결과 보고서 작성 및 기안"""
+ □ 결과 보고서 작성 및 기안"""
 
 
 def _format_excel(prompt: str) -> str:
@@ -231,10 +458,14 @@ def _format_table(prompt: str) -> str:
         items = [(name.strip(", "), int(num)) for name, num in matches]
         total = sum(num for _, num in items)
     else:
-        # Fallback to pure numbers
         nums = [int(n) for n in re.findall(r"\b\d+\b", prompt)]
-        items = [(f"항목 {i+1}", n) for i, n in enumerate(nums)]
-        total = sum(nums) if nums else 0
+        if not nums:
+            return """[건수 집계 및 요약 표]
+
+집계할 항목과 건수가 확인되지 않았습니다.
+"제출 완료 7건, 진행 중 4건"처럼 항목 이름과 건수를 함께 적어 주시면 표로 정리해 드립니다."""
+        items = [(f"{_NEED}: 항목 {i+1} 이름", n) for i, n in enumerate(nums)]
+        total = sum(nums)
 
     table_lines = [
         "[건수 집계 및 요약 표]",

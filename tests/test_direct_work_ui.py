@@ -197,6 +197,57 @@ class DirectWorkWidgetTests(unittest.TestCase):
                 mock_open.assert_called_once_with("뤼튼에 붙여넣을 내용", "wrtn")
                 self.assertIn("copied", self.feedbacks)
 
+    def test_open_web_ai_menu_lists_all_targets(self):
+        from syeonpet.work.web_ai_bridge import get_web_ai_targets
+        menu = self.widget.open_web_btn.menu()
+        self.assertIsNotNone(menu)
+        targets = get_web_ai_targets()
+        self.assertEqual(len(menu.actions()), len(targets))
+        # Button label no longer promises a single fixed service.
+        self.assertNotIn("뤼튼/ChatGPT", self.widget.open_web_btn.text())
+        # Choosing a menu entry forwards its own target id.
+        calls = []
+        self.widget._open_web_ai = lambda tid="wrtn": calls.append(tid)
+        for action, (target_id, _label, _url) in zip(menu.actions(), targets):
+            action.trigger()
+            self.assertEqual(calls[-1], target_id)
+
+    def test_ai_confirm_dialog_uses_provider_notice_and_name(self):
+        self.widget.input.setPlainText("공문 기안 작성해 줘")
+        self.widget.mode_combo.setCurrentIndex(1)  # ai_direct
+        captured = {}
+        from syeonpet.chat.dialogs import send_confirm_dialog as _real
+
+        def spy(widget, title, service, provider, sends, **kw):
+            captured.update(title=title, service=service, provider=provider,
+                            sends=sends, **kw)
+            box = _real(widget, title, service, provider, sends, **kw)
+            box.exec = lambda: QMessageBox.StandardButton.No
+            return box
+
+        with patch("syeonpet.chat.dialogs.send_confirm_dialog", side_effect=spy):
+            self.widget.submit()
+
+        # The destination is the display name, never the raw provider id.
+        self.assertEqual(captured["provider"], "jarvisclaw")
+        self.assertIn("JarvisClaw", captured["service"])
+        self.assertNotIn("jarvisclaw에", captured["service"])
+        self.assertIn("요청 내용", captured["detail_text"])
+        self.assertFalse(self.widget._busy)
+
+    def test_send_confirm_dialog_shows_notice_and_korean_buttons(self):
+        from syeonpet.chat.dialogs import PROVIDER_NOTICES, send_confirm_dialog
+        box = send_confirm_dialog(
+            self.widget, "무료 AI 전송 확인", "JarvisClaw / model", "jarvisclaw",
+            "요청 내용을", detail_text="요청 내용:\n테스트")
+        self.assertIn(PROVIDER_NOTICES["jarvisclaw"], box.text())
+        self.assertIn("JarvisClaw / model", box.text())
+        self.assertNotIn("jarvisclaw에 전송합니다", box.text())
+        self.assertIn("로 전송", box.button(QMessageBox.StandardButton.Yes).text())
+        self.assertEqual(box.button(QMessageBox.StandardButton.No).text(), "취소")
+        self.assertIn("요청 내용", box.detailedText())
+        box.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,6 +89,12 @@ class ClassificationTests(unittest.TestCase):
             "교육청에서 온 공문에 우리 학교 답변 초안 써줘": "official_reply",
             COMPLAINT: "complaint_reply",
             "다음 달 주민 참여 행사 안내문 만들어줘": "event_notice",
+            "학부모 총회 안내 문자": "event_notice",
+            "학교설명회 안내 문자 보내줘": "event_notice",
+            "안내 문자 써줘": "notice_letter",
+            "안내문자 보내줘": "notice_letter",
+            "학부모 상담 답장 써줘": "counsel_reply",
+            "민원 답신 초안": "complaint_reply",
             "그거 좀 해줘": "generic",
             "ㅁㄴㅇㄹㅁㄴㅇㄹ": "generic",
         }
@@ -111,6 +117,12 @@ class ClassificationTests(unittest.TestCase):
         # English 'weekly report' carries none (original I12 observed A형).
         self.assertEqual(classify("write a weekly report for my manager"), "general_report")
         self.assertEqual(classify("write a weekly report"), "general_report")
+
+    def test_completion_text_is_honest_about_skips(self):
+        self.assertEqual(flow._completion_text(0, 3), "답변 0/3 · 일부 미답변")
+        self.assertEqual(flow._completion_text(1, 2), "답변 1/2 · 일부 미답변")
+        self.assertEqual(flow._completion_text(3, 3), "완성도 100%")
+        self.assertEqual(flow._completion_text(0, 0), "완성도 100%")
 
 
 class DiagnosisTests(unittest.TestCase):
@@ -518,7 +530,8 @@ class FlowDialogTests(unittest.TestCase):
         prompt = dialog.result_edit.toPlainText()
         self.assertIn("[섹션별 근거]", prompt)
         self.assertIn("과장님", prompt)
-        self.assertEqual(dialog.complete_label.text(), "완성도 100%")
+        # Completeness label reflects answered/missing questions honestly.
+        self.assertEqual(dialog.complete_label.text(), "답변 2/4 · 일부 미답변")
         # Document-style rendering of the prompt itself (B13).
         dialog.view_toggle.setChecked(True)
         self.assertIn("[역할]", dialog.render_view.toHtml())
@@ -556,6 +569,31 @@ class FlowDialogTests(unittest.TestCase):
         prompt = dialog.result_edit.toPlainText()
         self.assertIn("전체 상세 수준", prompt)
         self.assertIn("성과 중심", prompt)
+
+    def test_complete_label_full_when_all_answered(self):
+        dialog = self._dialog()
+        self._start(dialog, WEEKLY)
+        for card in dialog._cards:
+            card.answer.setPlainText("답")
+        dialog._finish_generation()
+        self.assertEqual(dialog.complete_label.text(), "완성도 100%")
+
+    def test_ai_question_confirm_uses_notice_and_display_name(self):
+        from syeonpet.chat.dialogs import PROVIDER_NOTICES
+        dialog = self._dialog(getter=lambda: ("jarvisclaw", None))
+        self._start(dialog, WEEKLY)
+        dialog._ask_ai_questions()
+        self.app.processEvents()
+        box = dialog.findChild(QMessageBox)
+        self.assertIsNotNone(box)
+        self.assertIn("JarvisClaw / ", box.text())
+        self.assertIn(PROVIDER_NOTICES["jarvisclaw"], box.text())
+        # The raw provider id must never be the destination in the sentence.
+        self.assertNotIn("jarvisclaw에 전송합니다", box.text())
+        self.assertIn("로 전송", box.button(QMessageBox.StandardButton.Yes).text())
+        self.assertEqual(box.button(QMessageBox.StandardButton.No).text(), "취소")
+        self.assertIn("원래 요청", box.detailedText())
+        box.close()
 
     def test_ac04_composite_notice_and_sequencing(self):
         dialog = self._dialog()

@@ -106,6 +106,19 @@ class RestartDraftTest(unittest.TestCase):
         self.assertTrue(preparer._shutting_down)
         self.assertEqual(len(list(writer.directory.glob('*.json'))), 1)
 
+    def test_update_queued_with_empty_panel_saves_no_draft(self):
+        # A panel with no pending work must not leave a draft that would
+        # auto-open a blank window on the next launch.
+        writer = RestartDrafts(self.root)
+        preparer = UpdatePreparer(self.root)
+        class Empty(FakePanel):
+            def has_pending_work(self):
+                return False
+        with patch('updater_ui.updater_switch.pending_version', return_value='9.0.0'):
+            prepare_quit(preparer, writer, Empty(), self.root)
+        self.assertTrue(preparer._shutting_down)
+        self.assertFalse(writer.directory.exists())
+
     # Every retention test below calls RestartDrafts.prune_restored directly, so
     # deleting the method fails all of them with AttributeError, and each
     # assertion also pins the exact number of files the pruning pass must report.

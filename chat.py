@@ -137,23 +137,33 @@ class ChatPanel(QWidget):
         # 4. QStackedWidget for 4 sections
         self.section_stack = QStackedWidget(self)
 
+        def _section_scroll(widget: QWidget) -> QScrollArea:
+            """Wrap a section so short windows scroll instead of clipping controls."""
+            scroll = QScrollArea(self)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setWidget(widget)
+            return scroll
+
         # Page 0: Direct Work
         if DirectWorkWidget is not None:
             self.work_widget = DirectWorkWidget(self)
         else:
             self.work_widget = QWidget(self)
-        self.section_stack.addWidget(self.work_widget)
+        self.section_stack.addWidget(_section_scroll(self.work_widget))
 
         # Page 1: File Finder (instantiated with empty roots for instantaneous startup; scanned on first open)
         self.finder_widget = FileFinderWidget(index=FileIndex([]), parent=self)
         self.finder_widget.send_to_assistant.connect(self._on_finder_send_to_assistant)
-        self.section_stack.addWidget(self.finder_widget)
+        self.section_stack.addWidget(_section_scroll(self.finder_widget))
 
         # Page 2: Bag Workspace
         self.bag_widget = BagWorkspaceWidget(parent=self)
         self.bag_widget.task_completed.connect(self._on_bag_task_completed)
         self.bag_widget.timer_finished.connect(self.companion_praise)
-        self.section_stack.addWidget(self.bag_widget)
+        self.section_stack.addWidget(_section_scroll(self.bag_widget))
 
         # Page 3: Prompt Conversation
         self.prompt_conversation = PromptConversation(self)
@@ -331,6 +341,12 @@ class ChatPanel(QWidget):
         dialog = QMessageBox(QMessageBox.Icon.Question, "션 종료", msg,
                              QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
         dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        yes_btn = dialog.button(QMessageBox.StandardButton.Yes)
+        if yes_btn is not None:
+            yes_btn.setText("종료")
+        no_btn = dialog.button(QMessageBox.StandardButton.No)
+        if no_btn is not None:
+            no_btn.setText("취소")
         self._quit_dialog = dialog
 
         def finished(res):

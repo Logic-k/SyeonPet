@@ -264,10 +264,16 @@ class RestartDrafts:
 
 
 def prepare_quit(preparer, drafts, panel, install_root):
-    """Freeze queueing, then preserve drafts if an update became pending."""
+    """Freeze queueing, then preserve drafts if an update became pending.
+
+    An empty panel is not snapshotted: otherwise every quit would leave a
+    draft that auto-opens a blank window on the next launch.
+    """
     preparer.begin_shutdown()
     try:
-        if updater_switch.pending_version(install_root):
+        pending_check = getattr(panel, "has_pending_work", None)
+        has_work = pending_check() if callable(pending_check) else True
+        if updater_switch.pending_version(install_root) and has_work:
             drafts.save(panel)
     except Exception:
         preparer.cancel_shutdown()

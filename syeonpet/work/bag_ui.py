@@ -74,9 +74,11 @@ class BagWorkspaceWidget(QWidget):
         # 1. Focus Timer Controls Bar
         timer_box = QFrame(self)
         timer_box.setFrameShape(QFrame.Shape.StyledPanel)
-        t_layout = QHBoxLayout(timer_box)
+        from syeonpet.chat.dialogs import _ActionRow
+        t_layout = _ActionRow()
         t_layout.setContentsMargins(8, 6, 8, 6)
         t_layout.setSpacing(6)
+        timer_box.setLayout(t_layout)
 
         t_title = QLabel("⏱️ 집중 타이머:", timer_box)
         t_title.setStyleSheet("font-weight: bold; color: #2C3E50;")

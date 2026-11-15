@@ -332,5 +332,62 @@ def build_confirm_dialog(widget, title: str, text: str, callback) -> QMessageBox
                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, widget)
     dialog.setDefaultButton(QMessageBox.StandardButton.No)
     dialog.setEscapeButton(QMessageBox.StandardButton.No)
-    dialog.finished.connect(lambda value: callback() if value == QMessageBox.StandardButton.Yes else None)
+    dialog.finished.connect(
+        lambda value: callback() if callback is not None and value == QMessageBox.StandardButton.Yes else None)
+    return dialog
+
+
+def send_confirm_text(provider: str, service: str, sends: str,
+                      extra_notice: str = "", local: bool = False) -> str:
+    """Shared AI send/processing consent wording.
+
+    ``service`` — user-facing destination label; raw provider ids never appear.
+    ``sends``   — what is transmitted, ending in 을/를 so sentences stay
+                  grammatical (e.g. "완성형 프롬프트와 다듬기 지시를").
+    ``local``   — on-device (Ollama) wording instead of external-transfer wording.
+    """
+    if local:
+        body = f"{service} 로컬 서버에서 {sends} 처리합니다."
+        tail = "로컬 처리를 시작할까요?"
+    elif provider in PROVIDER_NOTICES:
+        body = f"{sends} {service}에 전송합니다.\n\n{PROVIDER_NOTICES[provider]}"
+        tail = "전송하시겠어요?"
+    else:
+        body = (f"{sends} {service}에 전송합니다. 제공자는 내용을 저장하거나 "
+                "서비스 개선에 사용할 수 있습니다. 학생·학부모·직원 식별정보, "
+                "민원 원문과 비공개 문서는 제외하거나 가상 내용으로 바꾸고 "
+                "기관의 사용 정책과 허용 서비스를 확인해 주세요.")
+        tail = "전송하시겠어요?"
+    if extra_notice:
+        body += "\n\n" + extra_notice
+    return f"{body}\n\n{tail}"
+
+
+def send_confirm_dialog(widget, title: str, service: str, provider: str, sends: str,
+                        detail_text: str = "", extra_notice: str = "",
+                        local: bool = False, callback=None) -> QMessageBox:
+    """Uniform AI send/processing confirmation across the app's entry points.
+
+    ``service``  — user-facing destination label (e.g. ``destination_label()``);
+                   raw provider ids must not appear in the message.
+    ``sends``    — what is transmitted, ending in a 을/를 particle so the
+                   sentences stay grammatical (e.g. "완성형 프롬프트와 다듬기 지시를").
+    ``provider`` — raw provider id, used only to look up PROVIDER_NOTICES.
+    ``local``    — switches to on-device (Ollama) wording.
+    """
+    text = send_confirm_text(provider, service, sends,
+                             extra_notice=extra_notice, local=local)
+    dialog = build_confirm_dialog(widget, title, text, callback)
+    dialog.setTextFormat(Qt.TextFormat.PlainText)
+    if detail_text:
+        dialog.setDetailedText(detail_text)
+        dialog.finished.connect(lambda _v: dialog.setDetailedText(""))
+    yes = dialog.button(QMessageBox.StandardButton.Yes)
+    if yes is not None:
+        yes.setText("처리 시작" if local else f"{service}로 전송")
+    cancel = dialog.button(QMessageBox.StandardButton.No)
+    if cancel is not None:
+        cancel.setText("취소")
+        cancel.setFocus()
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
     return dialog

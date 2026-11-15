@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from syeonpet.privacy.detector import detect_pii, mask_pii, summarize_pii
 from syeonpet.work.assistant_core import create_direct_draft, SYSTEM as ASSISTANT_SYSTEM
-from syeonpet.work.web_ai_bridge import copy_and_open_web_ai, GUIDE_MESSAGE
+from syeonpet.work.web_ai_bridge import copy_and_open_web_ai, get_web_ai_targets, GUIDE_MESSAGE
 
 
 CHIPS = [
@@ -158,8 +159,9 @@ class DirectWorkWidget(QWidget):
         self.result.setMinimumHeight(100)
         layout.addWidget(self.result, 3)
 
-        # Action Buttons Row
-        action_row = QHBoxLayout()
+        # Action Buttons Row (wraps at narrow widths instead of clipping)
+        from syeonpet.chat.dialogs import _ActionRow
+        action_row = _ActionRow()
         self.copy_btn = QPushButton("📋 결과 복사")
         self.copy_btn.clicked.connect(self._copy_result)
         action_row.addWidget(self.copy_btn)
@@ -168,8 +170,12 @@ class DirectWorkWidget(QWidget):
         self.save_btn.clicked.connect(self._save_to_document)
         action_row.addWidget(self.save_btn)
 
-        self.open_web_btn = QPushButton("🌐 복사 후 뤼튼/ChatGPT 열기")
-        self.open_web_btn.clicked.connect(self._open_web_ai)
+        self.open_web_btn = QPushButton("🌐 복사 후 웹 AI 열기 ▾")
+        web_menu = QMenu(self.open_web_btn)
+        for target_id, target_label, _url in get_web_ai_targets():
+            web_menu.addAction(target_label,
+                               lambda tid=target_id: self._open_web_ai(tid))
+        self.open_web_btn.setMenu(web_menu)
         action_row.addWidget(self.open_web_btn)
         layout.addLayout(action_row)
 
@@ -253,20 +259,24 @@ class DirectWorkWidget(QWidget):
             self.task_feedback.emit("success")
             return
 
-        # AI direct mode
+        # AI direct mode — same provider notice + display name as every other
+        # send confirmation in the app.
+        from syeonpet.chat.dialogs import send_confirm_dialog
+        from syeonpet.chat.executor import destination_label
         summary = summarize_pii(prompt)
-        pii_warning = f"\n\n주의: {summary}가 감지되었습니다. 먼저 가리기를 권장합니다." if summary else ""
-        box = QMessageBox(
-            QMessageBox.Icon.Question,
-            "무료 AI 전송 확인",
-            "무료 AI(JarvisClaw)를 통해 완성된 초안을 작성합니다. "
-            "요청 내용이 외부 모델 제공자에게 전송됩니다." + pii_warning + "\n\n계속 진행할까요?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            self,
-        )
+        extra = (f"주의: {summary}가 감지되었습니다. "
+                 "먼저 '개인정보 가리기'를 권장합니다.") if summary else ""
+        box = send_confirm_dialog(
+            self, "무료 AI 전송 확인",
+            destination_label("jarvisclaw"), "jarvisclaw",
+            "요청 내용을",
+            detail_text=f"요청 내용:\n{prompt}",
+            extra_notice=extra)
         if box.exec() != QMessageBox.StandardButton.Yes:
             return
+        self._start_ai(prompt)
 
+    def _start_ai(self, prompt: str):
         self._set_busy(True)
         self._worker = _AIWorker(prompt)
         self._worker.finished_signal.connect(self._on_ai_finished)
@@ -333,9 +343,9 @@ class DirectWorkWidget(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "저장 실패", f"파일을 저장하지 못했습니다:\n{exc}")
 
-    def _open_web_ai(self):
+    def _open_web_ai(self, target_id: str = "wrtn"):
         text = self.result.toPlainText() or self.input.toPlainText()
-        copy_and_open_web_ai(text, "wrtn")
+        copy_and_open_web_ai(text, target_id)
         self.task_feedback.emit("copied")
         QMessageBox.information(self, "웹 AI 연결", GUIDE_MESSAGE)
 

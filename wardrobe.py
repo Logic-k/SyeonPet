@@ -204,6 +204,9 @@ class WardrobeWindow(QWidget):
         self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # Never demand horizontal space: the body wraps into the viewport width
+        # even when a long pack path or status message is shown.
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         body = QWidget()
         self.scroll.setWidget(body)
         outer.addWidget(self.scroll)
@@ -217,6 +220,7 @@ class WardrobeWindow(QWidget):
                       "가져온 외형이나 일부 자세에서는 옷이 가려질 수 있어요.")
         hint.setObjectName("hint")
         hint.setWordWrap(True)
+        hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(hint)
         pack_form = QFormLayout()
         pack_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -239,6 +243,7 @@ class WardrobeWindow(QWidget):
         self.pack_status = QLabel(pet.wardrobe_pack_error or "완성된 로컬 Sprite-Gen 팩을 가져올 수 있어요.")
         self.pack_status.setWordWrap(True)
         self.pack_status.setObjectName("hint")
+        self.pack_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.pack_status)
         self._picker = None
         self._fill_packs()
@@ -299,6 +304,7 @@ class WardrobeWindow(QWidget):
         self.repeat_hint = QLabel("미리보기는 반복 재생돼요.")
         self.repeat_hint.setObjectName("hint")
         self.repeat_hint.setWordWrap(True)
+        self.repeat_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.repeat_hint)
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)

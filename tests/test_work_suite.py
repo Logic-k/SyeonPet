@@ -188,6 +188,64 @@ class TestAssistantCore(unittest.TestCase):
         self.assertEqual(d["intent"], "polite_rewrite")
 
 
+class TestAssistantCoreHonesty(unittest.TestCase):
+    """Offline drafts must never invent facts — missing values stay marked."""
+
+    def test_sms_uses_only_stated_time(self):
+        out = generate_offline_deliverable(
+            "내일 오후 3시까지 방과후학교 신청 마감 안내 문자 써줘")
+        self.assertIn("3시", out)
+        self.assertNotIn("4시", out)
+
+    def test_sms_without_time_marks_confirmation(self):
+        out = generate_offline_deliverable("학부모 총회 안내 문자 보내줘")
+        self.assertIn("[확인 필요]", out)
+        self.assertNotIn("4시", out)
+
+    def test_email_keeps_request_topic_not_fixed_template(self):
+        out = generate_offline_deliverable(
+            "교무부에서 각 학년부장님들께 교육과정 평가회 자료 제출 협조 메일 작성해 줘")
+        self.assertIn("교육과정 평가회", out)
+        self.assertNotIn("냉난방", out)
+        self.assertNotIn("시설 점검", out)
+
+    def test_meeting_notes_without_body_asks_for_content(self):
+        out = generate_offline_deliverable("회의 내용을 바탕으로 할 일 정리해줘")
+        self.assertIn("붙여 넣", out)
+        self.assertNotIn("김주무관", out)
+        self.assertNotIn("10월 30일", out)
+
+    def test_meeting_notes_preserves_pasted_facts(self):
+        out = generate_offline_deliverable(
+            "11월 20일 회의 메모: 교육과정 조정 완료, 이박사가 수요일까지 공문 발송")
+        self.assertIn("이박사", out)
+        self.assertIn("교육과정 조정", out)
+        self.assertIn("11월 20일", out)
+
+    def test_checklist_without_headcount_marks_needed(self):
+        out = generate_offline_deliverable("학부모 총회 준비 체크리스트 만들어줘")
+        self.assertIn("[확인 필요]", out)
+        self.assertNotIn("40명", out)
+        self.assertIn("학부모 총회", out)
+
+    def test_official_doc_sparse_request_marks_needed(self):
+        out = generate_offline_deliverable("방과후학교 운영 계획 공문 써줘")
+        self.assertIn("[확인 필요]", out)
+        self.assertNotIn("4곳", out)
+        self.assertNotIn("11월 18일", out)
+        self.assertNotIn("김주무관", out)
+
+    def test_inquiry_reply_without_facts_marks_needed(self):
+        out = generate_offline_deliverable("민원 회신 초안 작성해 줘")
+        self.assertIn("[확인 필요]", out)
+        self.assertNotIn("12월 1일", out)
+        self.assertIn("민원", out)
+
+    def test_table_without_counts_gives_guidance(self):
+        out = generate_offline_deliverable("건수 합계를 표로 정리해줘")
+        self.assertIn("집계할 항목", out)
+
+
 class TestTasksAndMemo(unittest.TestCase):
     def test_task_item_badges(self):
         today = datetime.date.today().isoformat()
