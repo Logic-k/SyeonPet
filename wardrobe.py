@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import struct
 from collections import OrderedDict
 from pathlib import Path
 
@@ -12,7 +11,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, 
                                QHBoxLayout, QLabel, QPushButton, QRadioButton, QScrollArea,
                                QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
-from wardrobe_presets import PRESETS, decorate_preset
+from wardrobe_presets import PRESETS, decorate_preset, find_green_leaf_bounds
 
 
 CHOICES = {
@@ -88,37 +87,7 @@ def _find_hair_bounds(pm: QPixmap):
     width, height = image.width(), image.height()
     if not width or not height:
         return None
-    pixels, stride = bytes(image.bits()), image.bytesPerLine()
-    green = set()
-    row_pixels = stride // 4
-    for i, (r, g, b, a) in enumerate(struct.iter_unpack("BBBB", pixels)):
-        if (a > 150 and g > 100 and r < 140 and b < 100
-                and g > r * 1.3 and g > b * 1.5):
-            y, x = divmod(i, row_pixels)
-            if x < width:
-                green.add(y * width + x)
-    biggest = []
-    while green:
-        stack = [green.pop()]
-        component = []
-        while stack:
-            point = stack.pop()
-            component.append(point)
-            x, y = point % width, point // width
-            for adjacent in (point - 1 if x else -1,
-                             point + 1 if x + 1 < width else -1,
-                             point - width if y else -1,
-                             point + width if y + 1 < height else -1):
-                if adjacent in green:
-                    green.remove(adjacent)
-                    stack.append(adjacent)
-        if len(component) > len(biggest):
-            biggest = component
-    if len(biggest) < 20:
-        return None
-    xs = [i % width for i in biggest]
-    ys = [i // width for i in biggest]
-    return min(xs), min(ys), max(xs), max(ys)
+    return find_green_leaf_bounds(bytes(image.bits()), width, height, image.bytesPerLine() // 4)
 
 
 def decorate_frame(frame: QPixmap, choice: str) -> QPixmap:

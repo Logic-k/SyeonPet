@@ -46,5 +46,7 @@ def open_diff_dialog(widget) -> QDialog:
     layout.addWidget(view)
     widget._diff_dialog, widget._diff_view = dialog, view
     widget._refresh_quality()
+    from syeonpet.chat.dialogs import sync_topmost_parent
+    sync_topmost_parent(dialog, widget)
     dialog.open()
     return dialog

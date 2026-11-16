@@ -19,7 +19,11 @@ import time
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from optimizer_core import keep_original_details
+from optimizer_core import (
+    DETAILS as _DETAILS,
+    keep_original_details,
+    utf16_length as _utf16_length,
+)
 
 if TYPE_CHECKING:
     from ai_profiles import AIProfile
@@ -102,11 +106,6 @@ _TASKS = {
     "research": "조사와 자료 확인", "learning": "학습과 설명",
     "analysis": "분석과 비교", "creative": "창작과 아이디어",
 }
-_DETAILS = {
-    "concise": "핵심을 간결하게 정리합니다.",
-    "balanced": "요청에 필요한 만큼 구체적으로 작성합니다.",
-    "detailed": "필요한 조건과 결과물의 구성을 상세히 설명합니다.",
-}
 _TIMEOUT = 90
 # Vireonix asks callers to retry 429 and 5xx with exponential backoff.
 _RETRY_STATUSES = (429, 502, 503, 504)
@@ -119,10 +118,6 @@ _dns_lock = threading.Lock()
 
 class OptimizationError(ValueError):
     """User-facing failure; never includes request or response text."""
-
-
-def _utf16_length(value: str) -> int:
-    return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
 
 
 def fixed_model(provider: str) -> str:

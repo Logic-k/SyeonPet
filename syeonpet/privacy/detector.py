@@ -120,24 +120,5 @@ def contains_redaction_placeholder(text: str) -> bool:
 
 
 def _patch_optimizer_core_leak_guard() -> None:
-    """Seamlessly prevent optimizer_core from leaking masked PII back into output."""
-    try:
-        import sys
-        import optimizer_core
-        orig_fn = getattr(optimizer_core, "keep_original_details", None)
-        if orig_fn is None or getattr(orig_fn, "_pii_guarded", False):
-            return
-
-        def guarded_keep_original_details(prompt: str, result: str, check_details: bool = True):
-            if contains_redaction_placeholder(result):
-                masked_prompt = mask_pii(prompt)
-                return orig_fn(masked_prompt, result, check_details=check_details)
-            return orig_fn(prompt, result, check_details=check_details)
-
-        guarded_keep_original_details._pii_guarded = True
-        optimizer_core.keep_original_details = guarded_keep_original_details
-    except Exception:
-        pass
-
-
-_patch_optimizer_core_leak_guard()
+    """Retained as a no-op; leak guarding lives directly in optimizer_core."""
+    pass

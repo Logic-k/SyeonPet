@@ -27,13 +27,8 @@ def _timer_status_text(timer) -> str:
     return "실행 중인 타이머 없음"
 
 
-def add_focus_timer_menu(parent: QMenu, timer) -> QMenu:
-    """Add standard focus/rest timer submenu to parent and return it."""
-    timer_menu = parent.addMenu("집중 / 휴식 타이머")
-    status = timer_menu.addAction("실행 중인 타이머 없음")
-    status.setEnabled(False)
-    timer_menu.addAction("25분 집중").triggered.connect(lambda: timer.start(25, "집중"))
-    timer_menu.addAction("5분 휴식").triggered.connect(lambda: timer.start(5, "휴식"))
+def _attach_timer_cycle_and_cancel(timer_menu: QMenu, timer, status: QAction) -> QAction:
+    """Attach Pomodoro cycle/cancel actions and live status refresh to *timer_menu*."""
     timer_menu.addAction("🍅 사이클 시작 (집중25 + 휴식5)").triggered.connect(lambda: timer.start_cycle())
     cancel = timer_menu.addAction("타이머 취소")
     cancel.triggered.connect(timer.cancel)
@@ -46,6 +41,17 @@ def add_focus_timer_menu(parent: QMenu, timer) -> QMenu:
     QObject.connect(timer, SIGNAL("changed()"), timer_menu, refresh)
     timer_menu.aboutToShow.connect(refresh)
     refresh()
+    return cancel
+
+
+def add_focus_timer_menu(parent: QMenu, timer) -> QMenu:
+    """Add standard focus/rest timer submenu to parent and return it."""
+    timer_menu = parent.addMenu("집중 / 휴식 타이머")
+    status = timer_menu.addAction("실행 중인 타이머 없음")
+    status.setEnabled(False)
+    timer_menu.addAction("25분 집중").triggered.connect(lambda: timer.start(25, "집중"))
+    timer_menu.addAction("5분 휴식").triggered.connect(lambda: timer.start(5, "휴식"))
+    _attach_timer_cycle_and_cancel(timer_menu, timer, status)
     return timer_menu
 
 
@@ -59,18 +65,7 @@ def build_timer_menu(timer_menu: QMenu, timer) -> tuple[QAction, QAction]:
         mode = "휴식" if mins == 5 else "집중"
         act.triggered.connect(lambda _=False, m=mins, lbl=mode: timer.start(m, lbl))
 
-    timer_menu.addAction("🍅 사이클 시작 (집중25 + 휴식5)").triggered.connect(lambda: timer.start_cycle())
-    cancel = timer_menu.addAction("타이머 취소")
-    cancel.triggered.connect(timer.cancel)
-
-    def refresh():
-        status.setText(_timer_status_text(timer))
-        cancel.setText("완료 기록 지우기" if timer.completed_label else "타이머 취소")
-        cancel.setEnabled(bool(timer.label or timer.completed_label))
-
-    QObject.connect(timer, SIGNAL("changed()"), timer_menu, refresh)
-    timer_menu.aboutToShow.connect(refresh)
-    refresh()
+    cancel = _attach_timer_cycle_and_cancel(timer_menu, timer, status)
     return status, cancel
 
 

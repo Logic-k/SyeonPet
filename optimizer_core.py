@@ -360,6 +360,15 @@ def keep_original_details(prompt: str, result: str, check_details: bool = True) 
     text = _strip_wrapper(prompt, result) or result.strip()
     if not check_details:
         return text, []
+    try:
+        from syeonpet.privacy.detector import contains_redaction_placeholder, detect_pii, mask_pii
+        has_redaction = contains_redaction_placeholder(text) or contains_redaction_placeholder(result)
+        if has_redaction and prompt:
+            prompt = mask_pii(prompt)
+        pii_spans = detect_pii(prompt) if prompt else []
+    except ImportError:
+        pii_spans = []
+        has_redaction = False
     material = _material(prompt)
     inserted = False
     placeholder = _single_material_placeholder(text)
@@ -367,13 +376,6 @@ def keep_original_details(prompt: str, result: str, check_details: bool = True) 
         # Only one explicitly source-related paste slot is unambiguous.
         text = text.replace(placeholder, material, 1)
         inserted = True
-    try:
-        from syeonpet.privacy.detector import contains_redaction_placeholder, detect_pii
-        pii_spans = detect_pii(prompt) if prompt else []
-        has_redaction = contains_redaction_placeholder(text) or contains_redaction_placeholder(result)
-    except ImportError:
-        pii_spans = []
-        has_redaction = False
 
     output_numbers = set(_numbers(text))
     prompt_numbers = []

@@ -1,7 +1,6 @@
 """Conversational prompt drafting, hosted inside the pet's existing window."""
 from __future__ import annotations
 
-import re
 import sys
 import threading
 
@@ -13,7 +12,7 @@ from optimizer_core import TASKS, create_offline_prompt, review_result, utf16_le
 from syeonpet.chat.dialogs import (
     CHAT_STYLE, PROVIDER_NOTICES, _ActionRow, _StatusText, build_confirm_dialog,
     open_clarification_dialog, open_comparison_dialog, open_library_dialog,
-    open_template_dialog,
+    open_template_dialog, send_confirm_text, sync_topmost_parent,
 )
 from syeonpet.chat.diff_view import compute_quality_text, open_diff_dialog
 from syeonpet.chat.error_sanitizer import sanitize_error as _safe_generation_error
@@ -32,13 +31,6 @@ from syeonpet.chat.ui_builder import setup_chat_ui
 
 _FIRST_REQUEST_EXAMPLE = "예: 연수 안내문 작성, 날짜는 [확인 필요]"
 _FOLLOWUP_EXAMPLE = "예: 위 내용을 세 항목으로 나눠 주세요."
-_PLACEHOLDER = re.compile(r"\[([^\[\]\n]{2,40})\]")
-_MAX_FILL_FIELDS = 8
-_CONDITION_LABELS = {"purpose": "목적", "audience": "대상", "format": "형식", "deadline": "기한"}
-_ROLE_HEADING = "확정된 문의·답변 역할 (사용자 확인):"
-_OTHER_AI = {"vireonix": ("pollinations-classic", "Pollinations Classic으로 보내기"),
-             "pollinations-classic": ("vireonix", "Vireonix로 보내기"),
-             "jarvisclaw": ("pollinations-classic", "Pollinations Classic으로 보내기")}
 _SETTINGS_ERROR = ("AI 연결 설정이나 계정 정보를 읽지 못해 요청을 시작하지 않았어요. "
                    "잠시 후 다시 시도하고, 계속되면 AI 설정을 확인해 주세요.")
 
@@ -182,6 +174,7 @@ class PromptConversation(QWidget):
             dlg = AISettingsDialog(self)
             self._settings_dialog = dlg
             dlg.finished.connect(self.reload_profiles)
+            sync_topmost_parent(dlg, self)
             dlg.open()
         except Exception:
             self._show_notice(_SETTINGS_ERROR)
@@ -487,21 +480,14 @@ class PromptConversation(QWidget):
             return
         if provider != "offline":
             service = self._destination(provider)
-            info = (f"원래 요청, 추가 조건과 이전 결과를 {service}에 전송합니다. "
-                    "제공자는 내용을 저장하거나 서비스 개선에 사용할 수 있습니다. "
-                    "학생·학부모·직원 식별정보, 민원 원문과 비공개 문서는 제외하거나 "
-                    "가상 내용으로 바꾸고 기관의 사용 정책과 허용 서비스를 확인해 주세요.\n\n전송하시겠어요?")
-            if provider in PROVIDER_NOTICES:
-                info = (f"원래 요청, 추가 조건과 이전 결과를 {service}에 전송합니다.\n\n"
-                        f"{PROVIDER_NOTICES[provider]}\n\n전송하시겠어요?")
-            if profile is not None and profile.provider == "ollama":
-                info = f"{service} 로컬 서버에서 원래 요청, 추가 조건과 이전 결과를 처리합니다. 로컬 처리를 시작할까요?"
+            is_local = profile is not None and profile.provider == "ollama"
+            info = send_confirm_text(provider, service, "원래 요청, 추가 조건과 이전 결과를", local=is_local)
             try:
                 expected = self._request_snapshot()
             except Exception:
                 self._show_notice("연결 설정을 읽지 못했어요. AI 연결 설정을 다시 확인해 주세요.")
                 return
-            dialog = self._confirm("로컬 AI 처리 확인" if profile is not None and profile.provider == "ollama" else "외부 AI 전송 확인",
+            dialog = self._confirm("로컬 AI 처리 확인" if is_local else "외부 AI 전송 확인",
                                   info, lambda: self._submit_if_unchanged(expected, text, original, revision, provider, old_ctx, next_ctx, previous, task, detail, pending, profile))
             if isinstance(dialog, QMessageBox):
                 dialog.setTextFormat(Qt.TextFormat.PlainText)

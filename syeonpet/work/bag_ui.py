@@ -42,6 +42,7 @@ class BagWorkspaceWidget(QWidget):
     ) -> None:
         super().__init__(parent)
         self.manager = BagTaskManager(storage_path)
+        self._shared_timer = None
         self.timer_seconds_left = 0
         self.active_timer_mode = ""
 
@@ -260,8 +261,32 @@ class BagWorkspaceWidget(QWidget):
         self.manager.set_memo(self.memo_edit.toPlainText())
 
     # --- Timer Control Methods ---
+    def bind_focus_timer(self, timer) -> None:
+        """Bind to the app-wide FocusTimer so countdowns stay synced across UIs."""
+        self._shared_timer = timer
+        self.focus_timer.stop()
+        timer.changed.connect(self._sync_from_shared_timer)
+        self._sync_from_shared_timer()
+
+    def _sync_from_shared_timer(self) -> None:
+        if self._shared_timer is None:
+            return
+        rem = self._shared_timer.remaining_seconds
+        lbl = self._shared_timer.label
+        self.active_timer_mode = lbl
+        self.timer_seconds_left = rem
+        if lbl and rem > 0:
+            self._update_timer_display()
+            self.timer_tick.emit(rem)
+        else:
+            self.lbl_countdown.setText("--:--")
+
     def start_focus_timer(self, minutes: int, mode_name: str = "집중") -> None:
         """Start countdown timer for specified minutes."""
+        if self._shared_timer is not None:
+            self._shared_timer.start(minutes, mode_name)
+            self.timer_started.emit(self.timer_seconds_left)
+            return
         self.active_timer_mode = mode_name
         self.timer_seconds_left = minutes * 60
         self._update_timer_display()
@@ -270,6 +295,11 @@ class BagWorkspaceWidget(QWidget):
 
     def stop_focus_timer(self) -> None:
         """Stop running countdown timer."""
+        if self._shared_timer is not None:
+            self._shared_timer.cancel()
+            self.timer_seconds_left = 0
+            self.lbl_countdown.setText("--:--")
+            return
         self.focus_timer.stop()
         self.timer_seconds_left = 0
         self.lbl_countdown.setText("--:--")

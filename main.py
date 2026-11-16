@@ -374,6 +374,8 @@ def main() -> int:
     behavior.hub_requested.connect(lambda: chat_panel.show_section_near_pet("work"))
 
     focus_timer = FocusTimer(app)
+    if hasattr(chat_panel, "bag_widget") and hasattr(chat_panel.bag_widget, "bind_focus_timer"):
+        chat_panel.bag_widget.bind_focus_timer(focus_timer)
     def on_timer_changed():
         active = bool(focus_timer.label)
         quick_bar.set_timer_active(active)

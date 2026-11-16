@@ -17,7 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CSC_PATH = Path(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe")
-DEFAULT_VERSION = "0.2.0"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from version import APP_VERSION
+
+DEFAULT_VERSION = APP_VERSION
 
 CS_TEMPLATE = """using System;
 using System.Diagnostics;

@@ -281,11 +281,20 @@ class HubAndPetV020Tests(unittest.TestCase):
             panel.font_size_combo.setCurrentText("크게")
             self.assertEqual(panel.font_size_combo.currentText(), "크게")
 
-            # Test pin button toggle
-            panel.pin_button.setChecked(True)
-            self.assertTrue(panel.pin_button.isChecked())
+            # Test pin button toggle preserves close button hint and visibility behavior
+            panel.show()
+            self.assertTrue(bool(panel.windowFlags() & Qt.WindowType.WindowCloseButtonHint))
             panel.pin_button.setChecked(False)
             self.assertFalse(panel.pin_button.isChecked())
+            self.assertTrue(bool(panel.windowFlags() & Qt.WindowType.WindowCloseButtonHint))
+            panel.pin_button.setChecked(True)
+            self.assertTrue(panel.pin_button.isChecked())
+            self.assertTrue(bool(panel.windowFlags() & Qt.WindowType.WindowCloseButtonHint))
+            panel.close()
+            self.assertFalse(panel.isVisible())
+            panel.show()
+            panel.close_button.click()
+            self.assertFalse(panel.isVisible())
         finally:
             panel.close()
 
@@ -298,6 +307,45 @@ class HubAndPetV020Tests(unittest.TestCase):
             panel.companion_praise.emit("오늘 할 일을 하나 멋지게 끝냈어요! 훌륭해요!")
             self.assertEqual(praise_messages, ["오늘 할 일을 하나 멋지게 끝냈어요! 훌륭해요!"])
         finally:
+            panel.close()
+
+    def test_chat_panel_tracks_direct_work_state_sleep_and_update_snapshot(self):
+        panel = ChatPanel(self.pet, self.behavior, {})
+        restored = ChatPanel(self.pet, self.behavior, {})
+        try:
+            self.assertFalse(panel.is_busy)
+            self.assertFalse(panel.has_pending_work())
+
+            panel.work_widget.input.setPlainText("학부모 안내 문자 초안 작성해 줘")
+            self.assertTrue(panel.has_pending_work())
+
+            panel._sleep_changed(True)
+            self.assertTrue(panel.work_widget._sleep_paused)
+            self.assertFalse(panel.work_widget.submit_btn.isEnabled())
+            panel._sleep_changed(False)
+            self.assertFalse(panel.work_widget._sleep_paused)
+            self.assertTrue(panel.work_widget.submit_btn.isEnabled())
+
+            panel.work_widget._set_busy(True)
+            self.assertTrue(panel.is_busy)
+            with self.assertRaises(RuntimeError):
+                panel.export_update_state()
+            panel.work_widget._set_busy(False)
+
+            panel.work_widget.result.setPlainText("완성된 가정통신문 초안입니다.")
+            state = panel.export_update_state()
+            self.assertEqual(
+                state["direct_work"],
+                {
+                    "input": "학부모 안내 문자 초안 작성해 줘",
+                    "result": "완성된 가정통신문 초안입니다.",
+                },
+            )
+            restored.restore_update_state(state)
+            self.assertEqual(restored.work_widget.input.toPlainText(), "학부모 안내 문자 초안 작성해 줘")
+            self.assertEqual(restored.work_widget.result.toPlainText(), "완성된 가정통신문 초안입니다.")
+        finally:
+            restored.close()
             panel.close()
 
     # 6. Stationary Onboarding Tour

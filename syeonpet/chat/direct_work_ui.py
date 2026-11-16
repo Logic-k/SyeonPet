@@ -73,6 +73,7 @@ class DirectWorkWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("directWorkWidget")
         self._busy = False
+        self._sleep_paused = False
         self._current_scale = 10.0
         self._worker: _AIWorker | None = None
         app = QApplication.instance()
@@ -236,16 +237,27 @@ class DirectWorkWidget(QWidget):
 
     load_document = load_from_file_finder
 
+    @property
+    def is_busy(self) -> bool:
+        return bool(self._busy)
+
+    def has_pending_work(self) -> bool:
+        return bool(self.input.toPlainText().strip() or self.result.toPlainText().strip())
+
+    def set_sleep_paused(self, paused: bool) -> None:
+        self._sleep_paused = bool(paused)
+        self.submit_btn.setEnabled(not self._busy and not self._sleep_paused)
+
     def _set_busy(self, busy: bool):
         self._busy = busy
-        self.submit_btn.setEnabled(not busy)
+        self.submit_btn.setEnabled(not busy and not self._sleep_paused)
         self.input.setReadOnly(busy)
         self.mode_combo.setEnabled(not busy)
         self.busy_changed.emit(busy)
 
     def submit(self):
         """Execute deliverable drafting based on selected execution mode."""
-        if self._busy:
+        if self._busy or self._sleep_paused:
             return
         prompt = self.input.toPlainText().strip()
         if not prompt:

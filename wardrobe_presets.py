@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 from collections import OrderedDict
 from pathlib import Path
 
@@ -135,6 +136,57 @@ def _image(choice):
     return _IMAGE_CACHE[choice]
 
 
+def _connected_components(points: set[int], width: int, height: int) -> list[list[int]]:
+    """Return 4-connected pixel index components within a width x height grid."""
+    remaining = set(points)
+    components = []
+    while remaining:
+        stack, component = [remaining.pop()], []
+        while stack:
+            point = stack.pop()
+            component.append(point)
+            x, y = point % width, point // width
+            for adjacent in (
+                point - 1 if x else -1,
+                point + 1 if x + 1 < width else -1,
+                point - width if y else -1,
+                point + width if y + 1 < height else -1,
+            ):
+                if adjacent in remaining:
+                    remaining.remove(adjacent)
+                    stack.append(adjacent)
+        components.append(component)
+    return components
+
+
+def find_green_leaf_bounds(
+    pixels: bytes,
+    width: int,
+    height: int,
+    row_pixels: int | None = None,
+) -> tuple[int, int, int, int] | None:
+    """Return (left, top, right, bottom) for the largest green leaf region, or None."""
+    if width <= 0 or height <= 0:
+        return None
+    stride_pixels = width if row_pixels is None else row_pixels
+    if stride_pixels <= 0:
+        return None
+    green = set()
+    limit = height * stride_pixels * 4
+    buf = pixels[:limit] if len(pixels) > limit else pixels
+    for i, (r, g, b, a) in enumerate(struct.iter_unpack("BBBB", buf)):
+        if a > 150 and g > 100 and r < 140 and b < 100 and g > r * 1.3 and g > b * 1.5:
+            y, x = divmod(i, stride_pixels)
+            if x < width and y < height:
+                green.add(y * width + x)
+    biggest = max(_connected_components(green, width, height), key=len, default=[])
+    if len(biggest) < 20:
+        return None
+    xs = [p % width for p in biggest]
+    ys = [p // width for p in biggest]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 def _anchors(frame):
     """Identify this frame's leaf and face without modifying source pixels.
 
@@ -154,56 +206,25 @@ def _anchors(frame):
     known = _known_anchors().get(hashlib.sha256(data).hexdigest())
     if known is not None:
         return _remember(key, known)
-    leaf = set()
-    face = set()
-    for y in range(256):
-        row = data[y * 1024:(y + 1) * 1024]
-        for x in range(256):
-            i = x * 4
-            r, g, b, a = row[i:i + 4]
-            if a > 150 and g > 100 and r < 140 and b < 100 and g > r * 1.3 and g > b * 1.5:
-                leaf.add(y * 256 + x)
-            # The cheeks are more reliable than the beak, which resembles feet.
-            if a > 160 and r > 180 and b > 130 and r - g > 20 and abs(r - b) < 85:
-                face.add(y * 256 + x)
-    biggest = []
-    while leaf:
-        stack, component = [leaf.pop()], []
-        while stack:
-            n = stack.pop()
-            component.append(n)
-            x, y = n % 256, n // 256
-            for adjacent in (n - 1 if x else -1, n + 1 if x < 255 else -1,
-                             n - 256 if y else -1, n + 256 if y < 255 else -1):
-                if adjacent in leaf:
-                    leaf.remove(adjacent)
-                    stack.append(adjacent)
-        if len(component) > len(biggest):
-            biggest = component
-    if len(biggest) < 20:
+    leaf_box = find_green_leaf_bounds(data, 256, 256)
+    if leaf_box is None:
         value = None
     else:
-        xs, ys = [p % 256 for p in biggest], [p // 256 for p in biggest]
-        leaf_box = min(xs), min(ys), max(xs), max(ys)
-        left, top, right, bottom = leaf_box
+        left, _top, right, bottom = leaf_box
+        # The cheeks are more reliable than the beak, which resembles feet.
         # Find actual cheeks, not small pink spots on the bag. Keep only pink
         # connected components with an area characteristic of a cheek.
-        candidates = {p for p in face if left - 60 <= p % 256 <= right + 60
-                      and bottom + 3 <= p // 256 <= min(255, bottom + 95)}
-        components = []
-        while candidates:
-            stack, component = [candidates.pop()], []
-            while stack:
-                n = stack.pop()
-                component.append(n)
-                x, y = n % 256, n // 256
-                for adjacent in (n - 1 if x else -1, n + 1 if x < 255 else -1,
-                                 n - 256 if y else -1, n + 256 if y < 255 else -1):
-                    if adjacent in candidates:
-                        candidates.remove(adjacent)
-                        stack.append(adjacent)
-            if len(component) >= 45:
-                components.append(component)
+        candidates = set()
+        for y in range(bottom + 3, min(256, bottom + 96)):
+            row = data[y * 1024:(y + 1) * 1024]
+            for x in range(max(0, left - 60), min(256, right + 61)):
+                i = x * 4
+                r, g, b, a = row[i:i + 4]
+                if a > 160 and r > 180 and b > 130 and r - g > 20 and abs(r - b) < 85:
+                    candidates.add(y * 256 + x)
+        components = [
+            c for c in _connected_components(candidates, 256, 256) if len(c) >= 45
+        ]
         components.sort(key=len, reverse=True)
         rows = {}
         for component in components[:2]:

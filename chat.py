@@ -27,6 +27,12 @@ class ChatPanel(QWidget):
 
     MIN_OPACITY = 60
     MAX_OPACITY = 100
+    BASE_WINDOW_FLAGS = (
+        Qt.WindowType.Tool
+        | Qt.WindowType.WindowTitleHint
+        | Qt.WindowType.WindowSystemMenuHint
+        | Qt.WindowType.WindowCloseButtonHint
+    )
     companion_praise = Signal(str)
 
     def __init__(self, pet, behavior, cfg: dict, prompt_open=None, settings=None):
@@ -36,7 +42,7 @@ class ChatPanel(QWidget):
         self.cfg = cfg
         self.setObjectName("promptWindow")
         self.setWindowTitle("🌱 션 데스크탑 비서")
-        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(self.BASE_WINDOW_FLAGS | Qt.WindowType.WindowStaysOnTopHint)
         self.setMinimumSize(360, 450)
         self.resize(460, 650)
 
@@ -46,6 +52,8 @@ class ChatPanel(QWidget):
             QLabel#windowControlLabel { color: #344e60; font-size: 9pt; }
             QPushButton#pinBtn { border: 1px solid #c0d1de; border-radius: 4px; padding: 3px 6px; background: #fff; font-size: 9pt; }
             QPushButton#pinBtn:checked { background: #e0f2fe; border-color: #38bdf8; color: #0369a1; font-weight: bold; }
+            QPushButton#closeHubBtn { border: 1px solid #c0d1de; border-radius: 4px; padding: 3px 7px; background: #fff; color: #344e60; font-size: 9pt; }
+            QPushButton#closeHubBtn:hover { background: #fee2e2; border-color: #f87171; color: #991b1b; }
             QPushButton#sectionPill { border: 1px solid #d0dfea; border-radius: 14px; padding: 4px 12px; background: #ffffff; color: #2c4253; font-weight: bold; font-size: 9.5pt; }
             QPushButton#sectionPill:hover { background: #eaf3f9; border-color: #adc6db; }
             QPushButton#sectionPill:checked { background: #2563eb; color: #ffffff; border-color: #1d4ed8; }
@@ -97,6 +105,12 @@ class ChatPanel(QWidget):
         self.opacity_value.setMinimumWidth(self.opacity_value.fontMetrics().horizontalAdvance("100%"))
         top_bar.addWidget(self.opacity_slider)
         top_bar.addWidget(self.opacity_value)
+        self.close_button = QPushButton("✕ 닫기", self)
+        self.close_button.setObjectName("closeHubBtn")
+        self.close_button.setAccessibleName("비서 창 닫기")
+        self.close_button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.close_button.clicked.connect(self.close)
+        top_bar.addWidget(self.close_button)
         layout.addLayout(top_bar)
 
         # 2. Section pill buttons row
@@ -225,13 +239,14 @@ class ChatPanel(QWidget):
             btn.setChecked(True)
 
     def _toggle_pin(self, checked: bool) -> None:
-        flags = self.windowFlags()
-        if checked:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        else:
-            flags &= ~Qt.WindowType.WindowStaysOnTopHint
+        was_visible = self.isVisible()
+        flags = self.BASE_WINDOW_FLAGS | (
+            Qt.WindowType.WindowStaysOnTopHint if checked else Qt.WindowType(0)
+        )
         self.setWindowFlags(flags)
-        self.show()
+        if was_visible:
+            self.show()
+            self.raise_()
 
     def _on_font_size_changed(self, choice: str) -> None:
         self._settings.setValue("fontSizeChoice", choice)
@@ -297,23 +312,45 @@ class ChatPanel(QWidget):
         self.sleep_notice.setVisible(paused)
         self.wake_button.setVisible(paused)
         self.prompt_conversation.set_sleep_paused(paused)
+        if hasattr(self.work_widget, "set_sleep_paused"):
+            self.work_widget.set_sleep_paused(paused)
 
     @property
     def is_busy(self) -> bool:
-        return self.prompt_conversation.is_busy
+        return bool(self.prompt_conversation.is_busy or getattr(self.work_widget, "is_busy", False))
 
     def has_pending_work(self) -> bool:
-        return self.prompt_conversation.has_pending_work()
+        return bool(
+            self.prompt_conversation.has_pending_work()
+            or (hasattr(self.work_widget, "has_pending_work") and self.work_widget.has_pending_work())
+        )
 
     def export_update_state(self):
-        return {"schema": 1, "visible": self.isVisible(),
-                "conversation": self.prompt_conversation.export_update_state()}
+        if getattr(self.work_widget, "is_busy", False):
+            raise RuntimeError("진행 중인 작업을 먼저 마쳐 주세요.")
+        state = {"schema": 1, "visible": self.isVisible(),
+                 "conversation": self.prompt_conversation.export_update_state()}
+        if hasattr(self.work_widget, "input") and hasattr(self.work_widget, "result"):
+            w_in = self.work_widget.input.toPlainText()
+            w_res = self.work_widget.result.toPlainText()
+            if w_in or w_res:
+                state["direct_work"] = {"input": w_in, "result": w_res}
+        return state
 
     def restore_update_state(self, state):
         if (not isinstance(state, dict) or type(state.get("schema")) is not int
                 or state["schema"] != 1 or type(state.get("visible")) is not bool):
             raise ValueError("복원할 대화창의 형식을 확인할 수 없습니다.")
+        direct_work = state.get("direct_work")
+        if direct_work is not None:
+            if (not isinstance(direct_work, dict)
+                    or not isinstance(direct_work.get("input", ""), str)
+                    or not isinstance(direct_work.get("result", ""), str)):
+                raise ValueError("복원할 작업 초안의 형식을 확인할 수 없습니다.")
         self.prompt_conversation.restore_update_state(state.get("conversation"))
+        if direct_work is not None and hasattr(self.work_widget, "input") and hasattr(self.work_widget, "result"):
+            self.work_widget.input.setPlainText(direct_work.get("input", ""))
+            self.work_widget.result.setPlainText(direct_work.get("result", ""))
         return state["visible"]
 
     def request_app_quit(self, callback, preserve_for_update=False):

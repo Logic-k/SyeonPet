@@ -6,6 +6,7 @@ storage boundaries. Never writes user state into the application or install root
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 APP_ROOT: Path = Path(__file__).resolve().parents[1]
@@ -58,3 +59,32 @@ def user_data_dir() -> Path:
     data_dir = (base / "SyeonPet").resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+def atomic_write_bytes(
+    path: Path,
+    payload: bytes,
+    prefix: str = ".tmp-",
+    replace_fn=None,
+) -> None:
+    """Atomically write *payload* to *path* via a temporary file in the same directory."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    replacer = os.replace if replace_fn is None else replace_fn
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=prefix, suffix=".tmp", delete=False
+        ) as stream:
+            temp_name = stream.name
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        replacer(temp_name, path)
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass

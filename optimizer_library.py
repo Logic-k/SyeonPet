@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,14 +15,17 @@ from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QHBoxLayout, 
                                QListWidget, QMessageBox, QPushButton,
                                QTextEdit, QVBoxLayout)
 
+from optimizer_core import (
+    DETAILS as _CORE_DETAILS,
+    TASKS as _CORE_TASKS,
+    utf16_length as _length,
+)
+from syeonpet.paths import atomic_write_bytes
+
 LIMIT = 500
 MAX_BYTES = 20 * 1024 * 1024
-TASKS = {"auto", "general", "writing", "coding", "research", "learning", "analysis", "creative"}
-DETAILS = {"balanced", "concise", "detailed"}
-
-
-def _length(value: str) -> int:
-    return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+TASKS = set(_CORE_TASKS)
+DETAILS = set(_CORE_DETAILS)
 
 
 def _entry_date(item: dict) -> str:
@@ -115,21 +117,7 @@ def merge_libraries(existing: list[dict], incoming: list[dict]) -> tuple[list[di
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
-    name = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".library-", suffix=".tmp", delete=False) as f:
-            name = f.name
-            f.write(payload)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(name, path)
-        name = None
-    finally:
-        if name:
-            try:
-                os.unlink(name)
-            except FileNotFoundError:
-                pass
+    atomic_write_bytes(path, payload, prefix=".library-", replace_fn=os.replace)
 
 
 class LibraryStore:

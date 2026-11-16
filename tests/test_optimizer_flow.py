@@ -1107,6 +1107,26 @@ class StaleAiResultTests(unittest.TestCase):
         self.assertEqual(dialog._step_results[0]["text"], first)
         self.assertFalse(dialog._busy_ai)
 
+    def test_ai_failed_keeps_sanitized_provider_messages_and_hides_raw_errors(self):
+        dialog = self._dialog()
+        self._start(dialog, WEEKLY)
+        dialog._finish_generation()
+
+        cooldown = "Pollinations Classic 요청 간격을 지키기 위해 12초 후 다시 시도해 주세요."
+        self._mark_inflight(dialog, "refine")
+        dialog._ai_failed(cooldown)
+        self.assertIn(cooldown, dialog.result_status.text())
+
+        payment = "JarvisClaw 무료 요청을 처리할 수 없습니다 (HTTP 402). 잠시 후 다시 시도해 주세요."
+        self._mark_inflight(dialog, "refine")
+        dialog._ai_failed(payment)
+        self.assertIn(payment, dialog.result_status.text())
+
+        self._mark_inflight(dialog, "refine")
+        dialog._ai_failed("RAW_TRACEBACK secret_token")
+        self.assertNotIn("secret_token", dialog.result_status.text())
+        self.assertIn("연결 실패", dialog.result_status.text())
+
 
 class FlowPanelIntegrationTests(unittest.TestCase):
     """PromptConversation wiring: entry button, provider getter, result intake."""
@@ -1188,6 +1208,207 @@ class FlowPanelIntegrationTests(unittest.TestCase):
         self.panel._accept_flow_result("[역할] QA", "주간 업무 보고", WEEKLY)
         self.assertIn("보관함", self.panel.inline_notice.text())
         self.assertEqual(self.panel.results, [])
+
+
+class AitongEnhancementTests(unittest.TestCase):
+    """Tests for expanded education types, profile cards, slot fill, quality check, and UX helpers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self._dialogs = []
+        self._pref_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._pref_tmp.cleanup)
+        pref_patch = patch("optimizer_flow._pref_path",
+                           return_value=Path(self._pref_tmp.name) / "prefs.json")
+        pref_patch.start()
+        self.addCleanup(pref_patch.stop)
+
+    def tearDown(self):
+        for dialog in self._dialogs:
+            dialog.close()
+        self.app.processEvents()
+
+    def _dialog(self, on_finished=None):
+        dialog = FlowDialog(None, "", provider_getter=lambda: ("offline", None), on_finished=on_finished)
+        self._dialogs.append(dialog)
+        dialog.show()
+        self.app.processEvents()
+        return dialog
+
+    def test_expanded_education_domain_classification(self):
+        cases = {
+            "내년도 기초학력 사업 추진 계획서 초안 작성해줘": "project_plan",
+            "생활기록부 세특 활동 관찰 문구 초안 작성해줘": "student_record",
+            "현장 점검 지적 사항 감사 대응 자료 정리해줘": "audit_response",
+            "초등 4학년 사회 수업 학습 활동 지도안 만들어줘": "lesson_activity",
+            "기초학력 수행평가 안내 가정통신문 써줘": "notice_letter",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(classify(text), expected)
+        sr_prompt = build_prompt("student_record", "세특 문구 써줘", diagnose("세특 문구 써줘")["questions"], {})
+        self.assertIn("비식별 표현만 사용", sr_prompt)
+
+    def test_profile_cards_persist_and_apply_on_work_page(self):
+        store = PreferenceStore()
+        store.record("weekly_report", "week_results", "민원 3건 완료")
+        saved = store.save_profile_card({
+            "name": "○○초 교무부",
+            "org": "○○초등학교",
+            "audience": "교감 선생님",
+            "sender": "김교사",
+            "tone": "정중하고 간결한 문체",
+        })
+        self.assertEqual(store.load(), {"weekly_report": {"week_results": {"text": "민원 3건 완료", "uses": 1}}})
+        cards = store.load_profile_cards()
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["org"], "○○초등학교")
+
+        dialog = self._dialog()
+        dialog.input_edit.setPlainText("방과후학교 가정통신문 써줘")
+        dialog._start()
+        self.app.processEvents()
+        dialog._apply_profile_card(saved)
+        self.assertIn("○○초등학교", dialog._cards[0].value())
+        self.assertEqual(dialog._diag["extracted"]["sender"], "김교사")
+
+        self.assertTrue(store.delete_profile_card(saved["id"]))
+        self.assertEqual(store.load_profile_cards(), [])
+
+    def test_slot_fill_bar_fills_unresolved_slots_and_updates_completeness(self):
+        from syeonpet.flow import extract_fillable_slots
+        dialog = self._dialog()
+        dialog.input_edit.setPlainText(WEEKLY)
+        dialog._start()
+        dialog._finish_generation()
+        self.assertTrue(dialog.slot_fill_bar.isVisibleTo(dialog.pages))
+        self.assertEqual(len(dialog.slot_fill_bar._editors), 4)
+        for _slot, edit in dialog.slot_fill_bar._editors:
+            edit.setText("방과후 3건 완료")
+        dialog.slot_fill_bar.apply_btn.click()
+        self.app.processEvents()
+        self.assertEqual(extract_fillable_slots(dialog.result_edit.toPlainText()), [])
+        self.assertTrue(dialog.slot_fill_bar.isHidden())
+        self.assertEqual(dialog.complete_label.text(), "완성도 100%")
+        # Verify meta-instruction CONFIRM_NEEDED in [제약] stayed intact.
+        self.assertIn("[확인 필요]로만 표기한다", dialog.result_edit.toPlainText())
+
+    def test_edit_original_manual_type_switch_and_alt_type_carry_over(self):
+        dialog = self._dialog()
+        dialog.input_edit.setPlainText("이번 주에 한 일을 정리해서 과장님께 낼 부서 주간보고 써줘")
+        dialog._start()
+        self.assertFalse(dialog.recognized_label.isHidden())
+        self.assertIn("과장님", dialog.recognized_label.text())
+
+        dialog._cards[0].answer.setPlainText("방과후 운영 3건 완료")
+        # Return via edit_input_button preserves original text instead of clearing.
+        dialog.edit_input_button.click()
+        self.assertEqual(dialog.pages.currentIndex(), FlowDialog.PAGE_INPUT)
+        self.assertIn("부서 주간보고", dialog.input_edit.toPlainText())
+
+        dialog._start()
+        dialog._cards[0].answer.setPlainText("방과후 운영 3건 완료")
+        idx_gen = dialog.type_combo.findData("general_report")
+        dialog.type_combo.setCurrentIndex(idx_gen)
+        self.app.processEvents()
+        self.assertEqual(dialog._diag["type"], "general_report")
+        self.assertTrue(any("방과후 운영 3건 완료" in c.value() for c in dialog._cards))
+
+        dialog._finish_generation()
+        self.assertFalse(dialog.alt_type_row.isHidden())
+        dialog._switch_result_type("weekly_report")
+        self.assertIn("주간 업무 보고", dialog.result_type_label.text())
+        self.assertIn("방과후 운영 3건 완료", dialog.result_edit.toPlainText())
+
+    def test_pii_banner_quality_bar_live_render_and_direct_chat_handoff(self):
+        captured = []
+        dialog = self._dialog(on_finished=lambda text, label, orig: captured.append((text, label, orig)))
+        dialog.input_edit.setPlainText("11월 20일 학부모(010-1234-5678) 안내 문자 써줘")
+        dialog._refresh_start()
+        self.assertFalse(dialog.input_pii_banner.isHidden())
+        dialog.mask_input_pii_btn.click()
+        self.assertNotIn("010-1234-5678", dialog.input_edit.toPlainText())
+        self.assertTrue(dialog.input_pii_banner.isHidden())
+
+        dialog._start()
+        dialog._finish_generation()
+        dialog.result_edit.setPlainText(dialog.result_edit.toPlainText().replace("11월 20일", "일정"))
+        dialog._on_result_edit_settled()
+        self.assertFalse(dialog.quality_bar.fix_btn.isHidden())
+        dialog.quality_bar.fix_btn.click()
+        self.assertIn("11월 20일", dialog.result_edit.toPlainText())
+
+        # Toggling render view after direct edits reflects live result_edit text.
+        dialog.result_edit.setPlainText("[역할] LIVE_RENDER_CHECK")
+        dialog.view_toggle.setChecked(True)
+        self.assertIn("LIVE_RENDER_CHECK", dialog.render_view.toPlainText())
+        dialog.view_toggle.setChecked(False)
+
+        dialog.apply_to_chat_button.click()
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][0], "[역할] LIVE_RENDER_CHECK")
+
+    def test_input_starters_ctrl_enter_refine_presets_and_export(self):
+        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
+        dialog = self._dialog()
+        # Click starter chip -> enables start_button cleanly
+        first_starter = next(iter(dialog.starter_buttons.values()))
+        first_starter.click()
+        self.assertTrue(dialog.start_button.isEnabled())
+        key_evt = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)
+        dialog.eventFilter(dialog.input_edit, key_evt)
+        self.app.processEvents()
+        self.assertEqual(dialog.pages.currentIndex(), FlowDialog.PAGE_WORK)
+
+        dialog._finish_generation()
+        first_preset = next(iter(dialog.refine_preset_buttons.values()))
+        first_preset.click()
+        self.assertTrue(bool(dialog.refine_input.text().strip()))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_hwpx = Path(tmpdir) / "flow_prompt.hwpx"
+            with patch("syeonpet.flow.flow_ui.QFileDialog.getSaveFileName", return_value=(str(out_hwpx), "")):
+                dialog.export_doc_button.click()
+            self.assertTrue(out_hwpx.is_file())
+            self.assertGreater(out_hwpx.stat().st_size, 0)
+
+    def test_profile_card_dialog_crud_and_file_import_with_pii(self):
+        from syeonpet.flow.widgets import ProfileCardDialog
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pref_path = Path(tmpdir) / "prefs.json"
+            sample_txt = Path(tmpdir) / "source_memo.txt"
+            sample_txt.write_text("담당자 연락처 010-1234-5678 / 학부모 안내 초안 작성", encoding="utf-8")
+
+            store = PreferenceStore(pref_path)
+            card_dlg = ProfileCardDialog(store=store)
+            card_dlg.name_edit.setText("행복초 교무부")
+            card_dlg.org_edit.setText("행복초등학교 교무실")
+            card_dlg.audience_edit.setText("교감 선생님")
+            card_dlg.save_card_btn.click()
+            self.assertEqual(card_dlg.card_list.count(), 1)
+
+            card_dlg.org_edit.setText("행복초등학교 연구부")
+            card_dlg.save_card_btn.click()
+            self.assertEqual(store.load_profile_cards()[0]["org"], "행복초등학교 연구부")
+
+            card_dlg.del_card_btn.click()
+            self.assertEqual(store.load_profile_cards(), [])
+            card_dlg.close_btn.click()
+
+            dialog = self._dialog()
+            with patch("syeonpet.flow.flow_ui.QFileDialog.getOpenFileName", return_value=(str(sample_txt), "")):
+                dialog._import_file()
+            self.assertIn("source_memo.txt", dialog.input_edit.toPlainText())
+            self.assertIn("010-1234-5678", dialog.input_edit.toPlainText())
+            self.assertFalse(dialog.input_pii_banner.isHidden())
+            dialog.mask_input_pii_btn.click()
+            self.assertNotIn("010-1234-5678", dialog.input_edit.toPlainText())
+            self.assertTrue(dialog.input_pii_banner.isHidden())
 
 
 if __name__ == "__main__":

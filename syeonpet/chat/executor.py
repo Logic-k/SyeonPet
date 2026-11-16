@@ -103,7 +103,14 @@ def check_over_limit(original: str, revision: str, context: str, previous: str, 
     return None
 
 
-def run_generate(frozen: tuple, destination: str, profile=None) -> dict:
+def run_generate(
+    frozen: tuple,
+    destination: str,
+    profile=None,
+    *,
+    empty_prev_msg: str = "이전 정리 결과가 비어 있습니다.",
+    revision_notes: list[str] | None = None,
+) -> dict:
     text, original, revision, old_ctx, next_ctx, previous, task, detail, pending = frozen
     started = time.monotonic()
     mod = sys.modules.get("optimizer_chat")
@@ -113,8 +120,12 @@ def run_generate(frozen: tuple, destination: str, profile=None) -> dict:
         if revision:
             validate_input(original, next_ctx, task, detail)
             if not previous.strip():
-                raise ValueError("이전 정리 결과가 비어 있습니다.")
-            reply = {"result": _append_conditions(previous, pending), "notes": [], "mode": "offline"}
+                raise ValueError(empty_prev_msg)
+            reply = {
+                "result": _append_conditions(previous, pending),
+                "notes": list(revision_notes) if revision_notes is not None else [],
+                "mode": "offline",
+            }
         else:
             reply = fn_off(original, context=next_ctx, task=task, detail=detail)
     else:
@@ -209,32 +220,14 @@ def submit_confirmed(widget, text, original, revision, provider, old_ctx, next_c
 
     def work():
         try:
-            started = time.monotonic()
-            mod = sys.modules.get("optimizer_chat")
-            fn_off = getattr(mod, "create_offline_prompt", create_offline_prompt)
-            fn_ai = getattr(mod, "optimize_ai", optimize_ai)
-            if provider == "offline":
-                if revision:
-                    validate_input(original, next_ctx, task, detail)
-                    if not previous.strip():
-                        raise ValueError("이전 정리 결과가 비어 있어 추가 조건을 붙일 수 없습니다. 이전 결과를 선택하거나 새 요청을 시작해 주세요.")
-                    reply = {"result": _append_conditions(previous, pending),
-                             "notes": ["수정한 이전 결과를 유지하고 추가 조건을 그대로 붙였습니다. AI 재작성은 하지 않았습니다."],
-                             "mode": "offline"}
-                else:
-                    reply = fn_off(original, context=next_ctx, task=task, detail=detail)
-            else:
-                kw = dict(context=old_ctx, provider=profile.provider if profile else provider,
-                          revision=revision, previous_result=previous, task=task, detail=detail)
-                if profile is not None:
-                    kw["profile"] = profile
-                reply = fn_ai(original, **kw)
-            reply = dict(reply)
-            reply["_metadata"] = {
-                "provider": profile.provider if profile else provider,
-                        "model": profile.model if profile else _metadata_model(provider),
-                "elapsed": max(0.0, time.monotonic() - started),
-            }
+            frozen = (text, original, revision, old_ctx, next_ctx, previous, task, detail, pending)
+            reply = run_generate(
+                frozen,
+                provider,
+                profile,
+                empty_prev_msg="이전 정리 결과가 비어 있어 추가 조건을 붙일 수 없습니다. 이전 결과를 선택하거나 새 요청을 시작해 주세요.",
+                revision_notes=["수정한 이전 결과를 유지하고 추가 조건을 그대로 붙였습니다. AI 재작성은 하지 않았습니다."],
+            )
             try:
                 widget._signals.completed.emit(reply)
             except RuntimeError:

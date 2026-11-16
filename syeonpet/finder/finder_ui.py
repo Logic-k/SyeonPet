@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..paths import atomic_write_bytes
+
 from .index_engine import FileIndex, build_index, get_cache_file_path, safe_open_or_reveal, search
 
 STYLE_CARD = """
@@ -205,9 +207,11 @@ class FileFinderWidget(QWidget):
             return
         roots.append(folder)
         try:
-            path = self._extra_roots_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps([str(r) for r in roots], ensure_ascii=False), encoding="utf-8")
+            atomic_write_bytes(
+                self._extra_roots_path(),
+                json.dumps([str(r) for r in roots], ensure_ascii=False).encode("utf-8"),
+                prefix=".extra_roots-",
+            )
         except Exception:
             pass
 

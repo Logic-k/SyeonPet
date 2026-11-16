@@ -6,8 +6,9 @@ import json
 import os
 from pathlib import Path
 import re
-import tempfile
 import threading
+
+from syeonpet.paths import atomic_write_bytes
 
 
 PROVIDERS = frozenset({
@@ -124,24 +125,10 @@ def save_profiles(profiles: list[AIProfile],
     if len(body) > 1_000_000:
         raise ValueError("AI profile file is too large.")
     target = _path(path)
-    temporary = None
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".ai_profiles-",
-                                         suffix=".tmp", delete=False) as stream:
-            temporary = stream.name
-            stream.write(body)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, target)
+        atomic_write_bytes(target, body, prefix=".ai_profiles-", replace_fn=os.replace)
     except OSError:
         raise ValueError("Could not save AI profiles.") from None
-    finally:
-        if temporary is not None:
-            try:
-                os.unlink(temporary)
-            except FileNotFoundError:
-                pass
 
 
 def list_models(profile: AIProfile,

@@ -20,6 +20,7 @@ import sys
 import time
 import zlib
 
+from ..paths import atomic_write_bytes, user_data_dir
 from .extractors import extract_document_text
 from .query_parser import ParsedQuery, extract_choseong, parse_natural_query
 
@@ -186,8 +187,7 @@ def get_default_scan_roots() -> list[Path]:
 
 
 def get_cache_file_path() -> Path:
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    base = (Path(local_appdata) if local_appdata else Path.home() / ".syeonpet") / "SyeonPet" / "file-finder"
+    base = user_data_dir() / "file-finder"
     base.mkdir(parents=True, exist_ok=True)
     return base / "index_v1.json.zlib"
 
@@ -213,8 +213,11 @@ class FileIndex:
     def _save_cache(self) -> None:
         if self.cache_path:
             try:
-                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                self.cache_path.write_bytes(zlib.compress(json.dumps(self._cache, ensure_ascii=False).encode("utf-8")))
+                atomic_write_bytes(
+                    self.cache_path,
+                    zlib.compress(json.dumps(self._cache, ensure_ascii=False).encode("utf-8")),
+                    prefix=".index_v1-",
+                )
             except Exception:
                 pass
 

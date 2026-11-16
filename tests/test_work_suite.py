@@ -328,6 +328,32 @@ class TestBagUI(unittest.TestCase):
             self.assertEqual(widget.timer_seconds_left, 1499)
             widget.stop_focus_timer()
             self.assertEqual(widget.timer_seconds_left, 0)
+            widget.close()
+
+    def test_bag_widget_bind_focus_timer_syncs_state(self):
+        from focus_timer import FocusTimer
+        with tempfile.TemporaryDirectory() as tmpdir:
+            widget = BagWorkspaceWidget(Path(tmpdir) / "bound_tasks.json")
+            timer = FocusTimer()
+            self.addCleanup(timer.cancel)
+            self.addCleanup(widget.close)
+
+            widget.bind_focus_timer(timer)
+            timer.start(25, "집중")
+            self.assertEqual(widget.active_timer_mode, "집중")
+            self.assertGreater(widget.timer_seconds_left, 0)
+            self.assertNotEqual(widget.lbl_countdown.text(), "--:--")
+
+            widget.stop_focus_timer()
+            self.assertEqual(timer.label, "")
+            self.assertEqual(widget.timer_seconds_left, 0)
+            self.assertEqual(widget.lbl_countdown.text(), "--:--")
+
+            widget.start_focus_timer(5, "휴식")
+            self.assertEqual(timer.label, "휴식")
+            timer.cancel()
+            self.assertEqual(widget.timer_seconds_left, 0)
+            self.assertEqual(widget.lbl_countdown.text(), "--:--")
 
 
 class TestWebAIBridge(unittest.TestCase):

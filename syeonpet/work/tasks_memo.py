@@ -7,21 +7,15 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 from pathlib import Path
-import tempfile
 import uuid
+
+from ..paths import atomic_write_bytes, user_data_dir
 
 
 def get_default_storage_path() -> Path:
     """Return default path for bag tasks and memo under local appdata."""
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if local_appdata:
-        base = Path(local_appdata) / "SyeonPet"
-    else:
-        base = Path.home() / ".syeonpet"
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "bag_tasks.json"
+    return user_data_dir() / "bag_tasks.json"
 
 
 class TaskItem:
@@ -112,20 +106,13 @@ class BagTaskManager:
         }
         raw_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
-        # Atomic replace in same directory
-        tmp_path = self.path.parent / f"{self.path.name}.tmp.{uuid.uuid4().hex[:6]}"
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(raw_json)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self.path)
+            atomic_write_bytes(
+                self.path,
+                raw_json.encode("utf-8"),
+                prefix=f".{self.path.name}-",
+            )
         except Exception:
-            if tmp_path.exists():
-                try:
-                    tmp_path.unlink()
-                except OSError:
-                    pass
             # Fallback direct write if atomic replace encounters platform locks
             try:
                 with open(self.path, "w", encoding="utf-8") as f:

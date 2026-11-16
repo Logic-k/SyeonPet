@@ -635,6 +635,9 @@ class PromptConversationTests(unittest.TestCase):
         payment = "JarvisClaw 무료 요청을 처리할 수 없습니다 (HTTP 402). 잠시 후 다시 시도해 주세요."
         self.assertEqual(_safe_generation_error(OptimizationError(payment)), payment)
         self.assertNotIn("QA_SECRET", _safe_generation_error(OptimizationError(payment + " QA_SECRET")))
+        cooldown = "Pollinations Classic 요청 간격을 지키기 위해 12초 후 다시 시도해 주세요."
+        self.assertEqual(_safe_generation_error(OptimizationError(cooldown)), cooldown)
+        self.assertNotIn("QA_SECRET", _safe_generation_error(OptimizationError(cooldown + " QA_SECRET")))
 
     def test_thread_start_failure_resets_busy_and_preserves_input(self):
         transitions = []

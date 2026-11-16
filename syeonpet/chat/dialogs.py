@@ -10,6 +10,14 @@ from PySide6.QtWidgets import (
 
 from optimizer_core import utf16_length
 
+
+def sync_topmost_parent(dialog: QWidget, parent: QWidget | None) -> None:
+    """Keep child dialogs above an always-on-top host window so they never hide behind it."""
+    host = parent.window() if parent is not None and hasattr(parent, "window") else None
+    if host is not None and hasattr(host, "windowFlags"):
+        if bool(host.windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
+            dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+
 CHAT_STYLE = """
 QWidget#promptConversation { background: #f3f6fa; }
 QWidget#promptConversation > QLabel { color: #172b3a; }
@@ -213,6 +221,7 @@ def open_clarification_dialog(widget) -> None:
     layout.addWidget(buttons)
     widget._clarification_dialog = dialog
     widget._clarification_fields = answers
+    sync_topmost_parent(dialog, widget)
     dialog.open()
 
 
@@ -283,6 +292,7 @@ def open_comparison_dialog(widget) -> None:
     start.clicked.connect(begin)
     widget._comparison_dialog = dialog
     widget._comparison_choices = choices
+    sync_topmost_parent(dialog, widget)
     dialog.open()
 
 
@@ -324,6 +334,7 @@ def open_library_dialog(widget) -> None:
                                            widget.task.currentData(), widget.detail.currentData(),
                                            revisions=revs)
     widget._library_dialog.restored.connect(widget._restore_library)
+    sync_topmost_parent(widget._library_dialog, widget)
     widget._library_dialog.open()
 
 
@@ -334,6 +345,7 @@ def build_confirm_dialog(widget, title: str, text: str, callback) -> QMessageBox
     dialog.setEscapeButton(QMessageBox.StandardButton.No)
     dialog.finished.connect(
         lambda value: callback() if callback is not None and value == QMessageBox.StandardButton.Yes else None)
+    sync_topmost_parent(dialog, widget)
     return dialog
 
 

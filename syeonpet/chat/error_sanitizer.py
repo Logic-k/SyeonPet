@@ -78,6 +78,8 @@ def sanitize_error(exc: Exception | str) -> str:
         return message
     if re.fullmatch(r"OVHcloud 무료 한도\(같은 인터넷 연결에서 분당 2회\)를 지키기 위해 [1-9][0-9]?초 후 다시 시도해 주세요\.", message):
         return message
+    if re.fullmatch(r"Pollinations Classic 요청 간격을 지키기 위해 [1-9][0-9]?초 후 다시 시도해 주세요\.", message):
+        return message
     return _SAFE_DEFAULT
 
 
