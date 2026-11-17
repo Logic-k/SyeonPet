@@ -21,6 +21,11 @@ try:
 except Exception:
     DirectWorkWidget = None
 
+try:
+    from syeonpet.docs.docs_ui import DocsToolsWidget
+except Exception:
+    DocsToolsWidget = None
+
 
 class ChatPanel(QWidget):
     """Unified 4-section assistant hub: Work, Finder, Bag, and Prompt."""
@@ -125,7 +130,7 @@ class ChatPanel(QWidget):
             ("work", "✨ 바로 도움받기"),
             ("finder", "🔍 내 파일 찾기"),
             ("bag", "🎒 할 일 · 메모"),
-            ("prompt", "🛠️ AI 질문 다듬기"),
+            ("docs", "📄 문서 도구"),
         ]
         for position, (key, title) in enumerate(sections):
             btn = QPushButton(title, self)
@@ -179,7 +184,17 @@ class ChatPanel(QWidget):
         self.bag_widget.timer_finished.connect(self.companion_praise)
         self.section_stack.addWidget(_section_scroll(self.bag_widget))
 
-        # Page 3: Prompt Conversation
+        # Page 3: Document tools (replaces the visible prompt tab)
+        if DocsToolsWidget is not None:
+            self.docs_widget = DocsToolsWidget(self)
+            self.docs_widget.task_feedback.connect(self._on_docs_feedback)
+        else:
+            self.docs_widget = QWidget(self)
+        self.section_stack.addWidget(_section_scroll(self.docs_widget))
+
+        # Page 4: Prompt Conversation — kept alive without a tab button because
+        # it owns update-draft snapshots, the guided-flow result landing and
+        # the AI provider selection used elsewhere.
         self.prompt_conversation = PromptConversation(self)
         self.conversation_scroll = QScrollArea(self)
         self.conversation_scroll.setObjectName("conversationScroll")
@@ -232,7 +247,7 @@ class ChatPanel(QWidget):
         if key == "finder" and getattr(self, "finder_widget", None) is not None:
             if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
                 self.finder_widget.ensure_indexed()
-        idx = {"work": 0, "finder": 1, "bag": 2, "prompt": 3}.get(key, 0)
+        idx = {"work": 0, "finder": 1, "bag": 2, "docs": 3, "prompt": 4}.get(key, 0)
         self.section_stack.setCurrentIndex(idx)
         btn = self.section_buttons.get(key)
         if btn:
@@ -267,6 +282,10 @@ class ChatPanel(QWidget):
 
     def _on_bag_task_completed(self, title: str) -> None:
         self.companion_praise.emit(f"할 일 완료! '{title}' 정말 멋져요 ✨")
+
+    def _on_docs_feedback(self, kind: str) -> None:
+        if kind == "success":
+            self.companion_praise.emit("문서 작업 완료! 잘했어요 ✨")
 
     def _on_finder_send_to_assistant(self, file_name: str, extracted_text: str, badge: str) -> None:
         text = mask_pii(extracted_text) if detect_pii(extracted_text) else extracted_text

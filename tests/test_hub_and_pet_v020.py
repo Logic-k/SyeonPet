@@ -258,11 +258,14 @@ class HubAndPetV020Tests(unittest.TestCase):
         cfg = {"font_size": 13}
         panel = ChatPanel(self.pet, self.behavior, cfg)
         try:
-            self.assertEqual(panel.section_stack.count(), 4)
+            self.assertEqual(panel.section_stack.count(), 5)
             self.assertIn("work", panel.section_buttons)
             self.assertIn("finder", panel.section_buttons)
             self.assertIn("bag", panel.section_buttons)
-            self.assertIn("prompt", panel.section_buttons)
+            self.assertIn("docs", panel.section_buttons)
+            # The prompt conversation page stays in the stack without a tab
+            # button — it owns update drafts, flow results and AI settings.
+            self.assertNotIn("prompt", panel.section_buttons)
 
             # Test section switching
             panel.open_section("finder")
@@ -271,8 +274,11 @@ class HubAndPetV020Tests(unittest.TestCase):
             panel.open_section("bag")
             self.assertEqual(panel.section_stack.currentIndex(), 2)
 
-            panel.open_section("prompt")
+            panel.open_section("docs")
             self.assertEqual(panel.section_stack.currentIndex(), 3)
+
+            panel.open_section("prompt")
+            self.assertEqual(panel.section_stack.currentIndex(), 4)
 
             panel.open_section("work")
             self.assertEqual(panel.section_stack.currentIndex(), 0)
