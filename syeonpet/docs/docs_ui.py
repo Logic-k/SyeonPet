@@ -237,6 +237,8 @@ class DocsToolsWidget(QWidget):
         self.batch_mode.addItem("AI용 텍스트로 변환 (.md)", "ai")
         self.batch_mode.addItem("개인정보 가림본 만들기 (.md)", "mask")
         self.batch_mode.addItem("hwp → hwpx로 변환", "hwpx")
+        self.batch_mode.addItem("문서 → PDF로 변환", "pdf")
+        self.batch_mode.addItem("이미지 → PDF 하나로 묶기", "imgpdf")
         lay.addWidget(self.batch_mode)
         row = _ActionRow()
         btn = QPushButton("폴더 골라 변환 시작")
@@ -250,6 +252,20 @@ class DocsToolsWidget(QWidget):
         if not folder:
             return
         mode = self.batch_mode.currentData()
+        if mode == "imgpdf":
+            from syeonpet.docs.pdf_export import export_images_to_pdf
+            images = _batch.collect_images(folder)
+            if not images:
+                self.status.setText("그 폴더에서 읽을 이미지를 찾지 못했어요.")
+                return
+            out_dir = Path(folder) / "_변환결과"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                out = export_images_to_pdf(images, out_dir / f"{Path(folder).name}_묶음.pdf")
+                self.status.setText(f"{len(images)}장을 {out.name}으로 묶었어요 → {out_dir}")
+            except Exception as exc:  # noqa: BLE001
+                self.status.setText(f"PDF로 묶지 못했어요: {exc}")
+            return
         files = _batch.collect_documents(
             folder,
             {".hwp"} if mode == "hwpx" else None)
@@ -259,6 +275,8 @@ class DocsToolsWidget(QWidget):
         out_dir = Path(folder) / "_변환결과"
         if mode == "hwpx":
             result = _batch.convert_hwp_to_hwpx(files, out_dir)
+        elif mode == "pdf":
+            result = _batch.convert_to_pdf(files, out_dir)
         else:
             result = _batch.convert_for_ai(files, out_dir, mask=(mode == "mask"))
         self.status.setText(f"{result.summary} → {out_dir}")

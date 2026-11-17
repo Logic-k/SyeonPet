@@ -99,3 +99,32 @@ def convert_hwp_to_hwpx(src_files: list[Path], out_dir: Path) -> BatchResult:
         except Exception as exc:  # noqa: BLE001
             result.failed.append((src, str(exc)))
     return result
+
+
+def convert_to_pdf(src_files: list[Path], out_dir: Path) -> BatchResult:
+    """Each document's text becomes a new A4 .pdf (content-level conversion)."""
+    from syeonpet.docs.pdf_export import export_text_to_pdf
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = BatchResult()
+    for src in src_files:
+        try:
+            text, badge = extract_document_text(src, max_chars=200000)
+        except Exception as exc:  # noqa: BLE001
+            result.failed.append((src, str(exc)))
+            continue
+        if not text.strip():
+            result.failed.append((src, badge or "본문을 읽지 못했습니다"))
+            continue
+        out = _out_name(src, out_dir, "", ".pdf")
+        try:
+            export_text_to_pdf(text, out, title=src.stem)
+            result.done.append((src, out))
+        except Exception as exc:  # noqa: BLE001
+            result.failed.append((src, str(exc)))
+    return result
+
+
+def collect_images(folder: str | Path) -> list[Path]:
+    from syeonpet.docs.pdf_export import is_image_file
+    folder = Path(folder)
+    return sorted(p for p in folder.iterdir() if p.is_file() and is_image_file(p))

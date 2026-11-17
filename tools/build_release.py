@@ -66,6 +66,7 @@ APP_FILES = (
     "syeonpet/docs/form_fill.py",
     "syeonpet/docs/official_form.py",
     "syeonpet/docs/official_rules.py",
+    "syeonpet/docs/pdf_export.py",
     "syeonpet/work/__init__.py",
     "syeonpet/work/assistant_core.py",
     "syeonpet/work/bag_ui.py",

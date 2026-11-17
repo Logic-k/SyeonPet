@@ -187,5 +187,51 @@ class FormFillTests(unittest.TestCase):
             self.assertTrue(all(f.suffix == ".hwpx" for f in result.done))
 
 
+class PdfExportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from PySide6.QtWidgets import QApplication
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_text_to_pdf_valid_and_paginates(self):
+        from syeonpet.docs.pdf_export import export_text_to_pdf
+        with tempfile.TemporaryDirectory() as d:
+            out = export_text_to_pdf("첫 줄\n" + "본문 줄\n" * 200, Path(d) / "t.pdf", title="테스트")
+            data = out.read_bytes()
+            self.assertTrue(data.startswith(b"%PDF"))
+            self.assertGreater(len(data), 2000)  # 200줄이면 실제 내용이 들어감
+
+    def test_images_to_pdf_bundle(self):
+        from PySide6.QtGui import QColor, QImage
+        from syeonpet.docs.pdf_export import export_images_to_pdf
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            imgs = []
+            for i, c in enumerate((QColor(255, 0, 0), QColor(0, 0, 255))):
+                img = QImage(64, 64, QImage.Format.Format_RGB32)
+                img.fill(c)
+                p = d / f"p{i}.png"
+                img.save(str(p))
+                imgs.append(p)
+            out = export_images_to_pdf(imgs, d / "bundle.pdf")
+            self.assertTrue(out.read_bytes().startswith(b"%PDF"))
+            self.assertIn(b"/Type /Page", out.read_bytes())
+
+    def test_no_images_raises(self):
+        from syeonpet.docs.pdf_export import export_images_to_pdf
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                export_images_to_pdf([], Path(d) / "x.pdf")
+
+    def test_batch_convert_to_pdf(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p / "a.txt").write_text("PDF로 바꿀 문서", encoding="utf-8")
+            out_dir = p / "out"
+            result = batch_mod.convert_to_pdf(batch_mod.collect_documents(p), out_dir)
+            self.assertEqual(len(result.done), 1)
+            self.assertTrue(result.done[0][1].read_bytes().startswith(b"%PDF"))
+
+
 if __name__ == "__main__":
     unittest.main()
